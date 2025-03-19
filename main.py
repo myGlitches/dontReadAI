@@ -181,9 +181,12 @@ def main() -> None:
     # Get the dispatcher to register handlers
     dispatcher = updater.dispatcher
     
-    # Add conversation handler for onboarding
+    # Add conversation handler for onboarding and news flow
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
+        entry_points=[
+            CommandHandler('start', start),
+            CommandHandler('news', news_command)  # Add news command as entry point
+        ],
         states={
             CHOOSING_INTEREST: [MessageHandler(Filters.text & ~Filters.command, save_interest)],
             SELECT_NEWS: [MessageHandler(Filters.text & ~Filters.command, select_news)],
@@ -193,9 +196,6 @@ def main() -> None:
     )
     
     dispatcher.add_handler(conv_handler)
-    
-    # Add news command handler
-    dispatcher.add_handler(CommandHandler('news', news_command))
     
     # Start the Bot
     updater.start_polling()
