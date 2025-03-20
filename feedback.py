@@ -21,25 +21,38 @@ def handle_feedback(update, context):
     data = query.data
     user_id = update.effective_user.id
     
-    # Extract the action and news index
-    action, index = data.split('_')
-    index = int(index)
-    news_item = context.user_data['current_news'][index]
-    
-    if action == "like":
-        # Handle like feedback
+    # Handle the different callback data formats
+    if data.startswith('like_'):
+        action = 'like'
+        index = int(data.split('_')[1])
+        
+        # Process like feedback
+        news_item = context.user_data['current_news'][index]
         update_preferences_from_feedback(user_id, news_item, "like")
         query.edit_message_text("Thanks for your feedback! I'll show more like this.")
         
-    elif action == "dislike":
+    elif data.startswith('dislike_'):
+        action = 'dislike'
+        index = int(data.split('_')[1])
+        
         # Ask for reason
         keyboard = [[
             InlineKeyboardButton("Not interested in this region", 
-                                 callback_data=f"reason_region_{index}"),
+                               callback_data=f"reason_region_{index}"),
             InlineKeyboardButton("Too technical", 
-                                 callback_data=f"reason_technical_{index}"),
+                               callback_data=f"reason_technical_{index}"),
             InlineKeyboardButton("Already knew this", 
-                                 callback_data=f"reason_knew_{index}")
+                               callback_data=f"reason_knew_{index}")
         ]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         query.edit_message_text("Why wasn't this relevant?", reply_markup=reply_markup)
+        
+    elif data.startswith('reason_'):
+        parts = data.split('_')
+        reason_type = parts[1]
+        index = int(parts[2])
+        
+        # Process dislike with reason
+        news_item = context.user_data['current_news'][index]
+        update_preferences_from_feedback(user_id, news_item, "dislike", f"not_interested_{reason_type}")
+        query.edit_message_text(f"Thanks! I'll adjust recommendations based on your feedback.")

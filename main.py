@@ -1,10 +1,15 @@
 # main.py
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler
-from db import get_user, create_user
+from telegram import ReplyKeyboardMarkup  # Add this import
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, Filters
+from db import get_user, create_user, update_user_preferences
 from news import fetch_ai_news
 from feedback import add_feedback_buttons, handle_feedback
 from preferences import initialize_preferences
 from config import TELEGRAM_TOKEN
+from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove
+
+# Define conversation states
+CHOOSING_INTEREST, GATHERING_INTERESTS = range(2)
 
 def start_command(update, context):
     """Start the bot and initialize user preferences"""
@@ -48,11 +53,141 @@ def news_command(update, context):
     # Add feedback buttons
     add_feedback_buttons(update, context, news_items)
 
+def save_interest(update, context):
+    """Save the selected interest category to the database."""
+    user_id = str(update.effective_user.id)
+    selected_option = update.message.text
+    
+    if selected_option == 'Custom Preferences':
+        update.message.reply_text(
+            "Great! Please tell me more about your interests in AI funding and investment.\n\n"
+            "For example, you might say: \"I'm interested in early-stage AI startups, "
+            "especially in healthcare, NLP, and computer vision. I prefer detailed technical news.\""
+        )
+        return GATHERING_INTERESTS
+    
+    # For 'AI Funding News' option - set default preferences
+    preferences = {
+        "interests": {
+            "ai_funding": 1.0,
+            "venture capital": 0.9,
+            "startups": 0.8
+        },
+        "exclusions": [],
+        "technical_level": "intermediate"
+    }
+    
+    # Update user preferences in database
+    update_user_preferences(user_id, preferences)
+    
+    # Provide confirmation
+    update.message.reply_text(
+        "Great! I'll focus on finding AI funding news for you.\n\n"
+        "This includes investments, fundraising rounds, and venture capital activity in the AI space.\n\n"
+        "Type /news anytime to get the latest AI funding updates.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    
+    return ConversationHandler.END
+
+def process_interests(update, context):
+    """Process the user's custom interests and save them."""
+    user_id = str(update.effective_user.id)
+    user_text = update.message.text
+    
+    # Let the user know we're processing
+    update.message.reply_text("Analyzing your interests... One moment please.")
+    
+    # Here you'd normally use an AI model to extract interests
+    # For simplicity, we'll just extract basic keywords
+    interests = {}
+    
+    # Simple keyword extraction
+    keywords = ["ai", "machine learning", "nlp", "computer vision", "healthcare", 
+                "fintech", "startups", "funding", "series a", "early-stage"]
+    
+    for keyword in keywords:
+        if keyword.lower() in user_text.lower():
+            interests[keyword] = 0.8
+    
+    # If no keywords found, add some defaults
+    if not interests:
+        interests = {
+            "ai_funding": 0.9,
+            "startups": 0.8
+        }
+    
+    # Create preferences object
+    preferences = {
+        "interests": interests,
+        "exclusions": [],
+        "technical_level": "intermediate" if "technical" in user_text.lower() else "beginner"
+    }
+    
+    # Update user preferences
+    update_user_preferences(user_id, preferences)
+    
+    # Confirm and provide next steps
+    topics = list(interests.keys())
+    topic_text = ", ".join(topics[:3])
+    if len(topics) > 3:
+        topic_text += f", and {len(topics)-3} more"
+        
+    update.message.reply_text(
+        f"Thanks! I'll focus on bringing you news about {topic_text}.\n\n"
+        "Type /news anytime to get personalized AI news updates.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    
+    return ConversationHandler.END
+
+def cancel(update, context):
+    """Cancel and end the conversation."""
+    update.message.reply_text('Operation cancelled.', reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END
+
+def reset_preferences(update, context):
+    """Reset user preferences and restart the preference setup process"""
+    user_id = str(update.effective_user.id)
+    user = update.effective_user
+    
+    # Clear user preferences
+    empty_preferences = {
+        "interests": {},
+        "exclusions": []
+    }
+    
+    update_user_preferences(user_id, empty_preferences)
+    
+    # Offer choice again
+    reply_keyboard = [['AI Funding News'], ['Custom Preferences']]
+    
+    update.message.reply_text(
+        f"Hi {user.first_name}! I've reset your preferences. Let's start over.\n\n"
+        "Choose from our standard AI Funding News or set custom preferences.",
+        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+    )
+    
+    return CHOOSING_INTEREST
+
 def main():
     updater = Updater(TELEGRAM_TOKEN)
     dp = updater.dispatcher
     
-    dp.add_handler(CommandHandler("start", start_command))
+    # Add conversation handler for preference setup
+    conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler('start', start_command),
+            CommandHandler('reset', reset_preferences)
+        ],
+        states={
+            CHOOSING_INTEREST: [MessageHandler(Filters.text & ~Filters.command, save_interest)],
+            GATHERING_INTERESTS: [MessageHandler(Filters.text & ~Filters.command, process_interests)]
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+    
+    dp.add_handler(conv_handler)
     dp.add_handler(CommandHandler("news", news_command))
     dp.add_handler(CallbackQueryHandler(handle_feedback))
     
