@@ -75,18 +75,10 @@ def handle_feedback_callback(update: Update, context: CallbackContext) -> int:
         return ConversationHandler.END
         
     elif action == "dislike":
-        # For negative feedback, ask for more details
-        query.edit_message_text(
-            text=f"I'm sorry this news wasn't relevant to you. Could you briefly tell me why?\n\n"
-                 f"For example: \"Too technical\", \"Not my industry\", or \"Not about funding\""
-        )
-        
-        # Store the rated item for later use
-        context.user_data['rated_item'] = rated_item
-        
-        return WAITING_FOR_FEEDBACK_REASON
+        # For negative feedback, we want to immediately weaken the relevant preferences
+        # (we'll fine
     
-    return ConversationHandler.END
+        return ConversationHandler.END
 
 def process_feedback_reason(update: Update, context: CallbackContext) -> int:
     """Process the user's explanation for negative feedback"""
@@ -100,6 +92,9 @@ def process_feedback_reason(update: Update, context: CallbackContext) -> int:
     
     # Let the user know we're processing
     update.message.reply_text("Analyzing your feedback... One moment please.")
+    
+    # Apply immediate weakening with the specific feedback text
+    weaken_preferences(user_id, rated_item, feedback_text)
     
     # Get current user preferences
     user_data = get_user(user_id)
@@ -195,20 +190,65 @@ def strengthen_preferences(user_id, rated_item):
     except Exception as e:
         logger.error(f"Error strengthening preferences: {str(e)}")
 
+def weaken_preferences(user_id, rated_item, feedback_text=None):
+    """Weaken preferences based on negative feedback"""
+    try:
+        # Get the user's current tags
+        user_tags = get_user_tags(user_id)
+        
+        # If no tags, nothing to weaken
+        if not user_tags:
+            return
+        
+        # Extract keywords from the news title
+        title = rated_item.get('title', '').lower()
+        
+        # Extract potential topics from the title
+        title_words = title.split()
+        common_words = ['a', 'an', 'the', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'about', 'and', 'or']
+        keywords = [word for word in title_words if word not in common_words and len(word) > 3]
+        
+        # For each existing tag, decrease weight if it appears in the title
+        for tag_data in user_tags:
+            tag = tag_data.get('tag', '').lower()
+            current_weight = tag_data.get('weight', 0.5)
+            
+            # If the tag appears in the title or keywords, decrease its weight
+            if tag in title or any(tag in keyword for keyword in keywords):
+                # Decrease weight but not below 0.1
+                new_weight = max(0.1, current_weight - 0.2)
+                
+                # Update the tag weight
+                update_tag_weight(user_id, tag, new_weight)
+                logger.info(f"Decreased weight for tag '{tag}' from {current_weight} to {new_weight}")
+            
+            # If feedback specifically mentions disinterest in a topic (e.g., "EU"), remove it
+            if feedback_text and tag in feedback_text.lower() and any(neg in feedback_text.lower() for neg in ["don't", "not", "dislike"]):
+                # Set a very low weight or delete the tag entirely
+                update_tag_weight(user_id, tag, 0.1)  # Setting very low rather than deleting
+                logger.info(f"Significantly decreased weight for rejected tag '{tag}' to 0.1")
+    
+    except Exception as e:
+        logger.error(f"Error weakening preferences: {str(e)}")
+
 def analyze_feedback_with_ai(feedback_text, news_item, current_preferences, current_interests):
     """Use AI to analyze feedback and update user preferences"""
     try:
         # Format current interests for AI prompt
         interests_string = ", ".join(current_interests) if current_interests else "None specified"
         
-        # Create prompt for the AI
+        # Extract key topics from the news item for better analysis
+        news_title = news_item.get('title', '')
+        news_source = news_item.get('source', '')
+        
+        # Create prompt for the AI with explicit instructions for negative feedback
         prompt = f"""
         You are an AI preference analyzer for a news recommendation system.
         
         USER FEEDBACK ANALYSIS TASK:
         The user was shown this news article:
-        - Title: {news_item.get('title', '')}
-        - Source: {news_item.get('source', '')}
+        - Title: {news_title}
+        - Source: {news_source}
         
         The user indicated this was NOT relevant and provided this reason:
         "{feedback_text}"
@@ -218,13 +258,13 @@ def analyze_feedback_with_ai(feedback_text, news_item, current_preferences, curr
         - Role: {current_preferences.get('role', 'investor')}
         - Technical level: {current_preferences.get('technical_level', 'intermediate')}
         
-        TASK:
-        Based on the user's feedback, update their preference profile to better match their interests.
-        
-        1. Identify topics to ADD based on what they seem to want more of
-        2. Identify topics to REMOVE that they're not interested in
-        3. Adjust the weight of existing topics (from 0.0 to 1.0)
-        4. Consider if their technical level or role should be adjusted
+        IMPORTANT INSTRUCTIONS:
+        1. If the user expresses dislike for a topic (e.g., "don't care about EU"), you MUST REMOVE all related topics
+           (e.g., "eu_tech", "european_startups") from their interests.
+        2. For any topics that appear in the news title but the user didn't like, DECREASE their weight by 0.3 or REMOVE them.
+        3. DO NOT add new topics unless the user explicitly indicates interest in alternative topics.
+        4. Be very careful with negative feedback - it usually means to REMOVE topics, not add them.
+        5. This is critical: Never add a topic that the user has expressed disinterest in.
         
         Return a complete updated preference profile in JSON format that includes:
         {{
@@ -264,7 +304,39 @@ def analyze_feedback_with_ai(feedback_text, news_item, current_preferences, curr
         for key in current_preferences:
             if key not in updated_preferences:
                 updated_preferences[key] = current_preferences[key]
+        
+        # Special handling for geographic region rejections
+        feedback_lower = feedback_text.lower()
+        regions = ["eu", "europe", "european", "us", "usa", "america", "american", "china", "chinese", 
+                  "asia", "asian", "africa", "african", "middle east", "latin america"]
+        
+        # If user expressed disinterest in a region, ensure all related topics are removed
+        for region in regions:
+            if (f"don't care about {region}" in feedback_lower or 
+                f"not interested in {region}" in feedback_lower or 
+                f"don't like {region}" in feedback_lower):
                 
+                # Remove any topics containing the region name
+                interests_to_remove = []
+                for topic in updated_preferences["interests"].keys():
+                    if region in topic.lower():
+                        interests_to_remove.append(topic)
+                
+                # Remove identified topics
+                for topic in interests_to_remove:
+                    if topic in updated_preferences["interests"]:
+                        del updated_preferences["interests"][topic]
+                
+                logger.info(f"Removed {len(interests_to_remove)} region-related topics based on feedback")
+        
+        # Double check that we haven't accidentally added topics that should be removed
+        # (This is a safety check against AI misinterpreting the feedback)
+        if "cloud" in feedback_lower and "don't" in feedback_lower:
+            interests_to_remove = [topic for topic in updated_preferences["interests"] if "cloud" in topic.lower()]
+            for topic in interests_to_remove:
+                if topic in updated_preferences["interests"]:
+                    del updated_preferences["interests"][topic]
+        
         logger.info(f"Successfully updated preferences based on feedback")
         return updated_preferences
         
