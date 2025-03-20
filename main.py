@@ -204,6 +204,25 @@ def cancel(update: Update, context: CallbackContext) -> int:
     update.message.reply_text('Operation cancelled.', reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
+def reset_command(update: Update, context: CallbackContext) -> int:
+    """Reset user preferences and start over."""
+    user_id = str(update.effective_user.id)
+    user = update.effective_user
+    
+    # Delete user from database or reset their preferences
+    # Option 1: If you have a delete_user function
+    # delete_user(user_id)
+    
+    # Option 2: Or reset their preferences to empty/default
+    update_user_preferences(user_id, {})
+    
+    update.message.reply_text(
+        f"Hi {user.first_name}! I've reset your preferences. Let's start over.\n\n"
+        "Tell me briefly about your interest in AI - what specific topics, technologies, or news would be most valuable to you?",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return GATHERING_INTERESTS
+
 def main() -> None:
     """Start the bot."""
     # Create the Updater and pass it your bot's token
@@ -216,7 +235,8 @@ def main() -> None:
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler('start', start),
-            CommandHandler('news', news_command)
+            CommandHandler('news', news_command),
+            CommandHandler('reset', reset_command)
         ],
         states={
             GATHERING_INTERESTS: [MessageHandler(Filters.text & ~Filters.command, process_interests)],
