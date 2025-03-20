@@ -238,9 +238,12 @@ def main() -> None:
     
     # Add feedback conversation handler
     feedback_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(handle_feedback_callback, pattern=r'^(like|dislike)_\d+$')],
+        entry_points=[CallbackQueryHandler(handle_feedback_callback, pattern=r'^(like|dislike|reason)_')],
         states={
-            WAITING_FOR_FEEDBACK_REASON: [MessageHandler(Filters.text & ~Filters.command, process_feedback_reason)]
+            WAITING_FOR_FEEDBACK_REASON: [
+                CallbackQueryHandler(handle_feedback_callback, pattern=r'^reason_'),
+                MessageHandler(Filters.text & ~Filters.command, process_feedback_reason)
+            ]
         },
         fallbacks=[CommandHandler('cancel', cancel_feedback)]
     )

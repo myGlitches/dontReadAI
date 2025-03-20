@@ -66,18 +66,33 @@ def handle_feedback_callback(update: Update, context: CallbackContext) -> int:
             return ConversationHandler.END
         
         # Handle like/dislike buttons
-        if callback_data.startswith('like_') or callback_data.startswith('dislike_'):
+        if callback_data.startswith('like_'):
             try:
                 # Extract the news item index
                 index = int(callback_data.split('_')[1]) - 1
                 selected_item = news_items[index]
+                
+                # Process like feedback
+                strengthen_preferences(str(update.effective_user.id), selected_item)
+                query.edit_message_text("Thank you for your feedback!")
+                logger.info(f"Liked news item: {selected_item.get('title', 'Unknown')}")
+                
+                return ConversationHandler.END
+                
             except (IndexError, ValueError) as e:
                 logger.error(f"Error extracting news item index: {e}")
                 query.edit_message_text("Error: Invalid news item.")
                 return ConversationHandler.END
-            
-            # If dislike, ask for reason
-            if callback_data.startswith('dislike_'):
+                
+        elif callback_data.startswith('dislike_'):
+            try:
+                # Extract the news item index
+                index = int(callback_data.split('_')[1]) - 1
+                selected_item = news_items[index]
+                
+                # Store the rated item for future reference
+                context.user_data['rated_item'] = selected_item
+                
                 # Prepare keyboard for feedback reasons
                 keyboard = [
                     [InlineKeyboardButton("Too Technical", callback_data=f"reason_technical_{index+1}")],
@@ -91,26 +106,64 @@ def handle_feedback_callback(update: Update, context: CallbackContext) -> int:
                     reply_markup=reply_markup
                 )
                 return WAITING_FOR_FEEDBACK_REASON
-            
-            # Handle like feedback
-            query.edit_message_text("Thank you for your feedback!")
-            logger.info(f"Liked news item: {selected_item.get('title', 'Unknown')}")
-        
+                
+            except (IndexError, ValueError) as e:
+                logger.error(f"Error extracting news item index: {e}")
+                query.edit_message_text("Error: Invalid news item.")
+                return ConversationHandler.END
+                
         # Handle reason selection
         elif callback_data.startswith('reason_'):
             try:
                 # Extract reason and index
-                _, reason, index = callback_data.split('_')
-                index = int(index) - 1
+                parts = callback_data.split('_')
+                reason = parts[1]
+                index = int(parts[2]) - 1
                 selected_item = news_items[index]
+                
+                # Store the rated item and reason for further processing
+                context.user_data['rated_item'] = selected_item
+                context.user_data['feedback_reason'] = reason
+                
+                # Apply immediate feedback based on reason
+                user_id = str(update.effective_user.id)
+                
+                # Process feedback with reason
+                feedback_text = f"Not interested because it's {reason}"
+                weaken_preferences(user_id, selected_item, feedback_text)
+                
+                # Get current user preferences
+                user_data = get_user(user_id)
+                if user_data and user_data.get('preferences'):
+                    current_preferences = user_data.get('preferences', {})
+                    current_interests = list(current_preferences.get('interests', {}).keys())
+                    
+                    # Use AI to analyze feedback and update preferences
+                    updated_preferences = analyze_feedback_with_ai(
+                        feedback_text, 
+                        selected_item,
+                        current_preferences,
+                        current_interests
+                    )
+                    
+                    if updated_preferences:
+                        # Update the user's preferences in the database
+                        update_user_preferences(user_id, updated_preferences)
+                        
+                        # Update or create user tags based on new preferences
+                        for topic, weight in updated_preferences["interests"].items():
+                            create_user_tag(user_id, topic, weight)
+                
+                # Log the specific reason
+                logger.info(f"Dislike reason for '{selected_item.get('title', 'Unknown')}': {reason}")
+                query.edit_message_text("Thank you for your detailed feedback! I'll improve my recommendations based on your preferences.")
+                
+                return ConversationHandler.END
+                
             except (ValueError, IndexError) as e:
                 logger.error(f"Error processing reason: {e}")
                 query.edit_message_text("Error processing feedback.")
                 return ConversationHandler.END
-            
-            # Log the specific reason
-            logger.info(f"Dislike reason for '{selected_item.get('title', 'Unknown')}': {reason}")
-            query.edit_message_text("Thank you for your detailed feedback!")
         
         return ConversationHandler.END
     
