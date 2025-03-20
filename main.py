@@ -2,13 +2,18 @@
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Updater, CommandHandler, MessageHandler, Filters,
-    ConversationHandler, CallbackContext
+    ConversationHandler, CallbackContext, CallbackQueryHandler
 )
 import logging
 from config import TELEGRAM_TOKEN
 from db import get_user, create_user, update_user_preferences, create_user_tag
 from news import fetch_ai_tech_news
 from ai_analysis import extract_interests_with_ai
+from feedback import (
+    add_feedback_buttons, handle_feedback_callback, 
+    process_feedback_reason, cancel_feedback, 
+    WAITING_FOR_FEEDBACK_REASON
+)
 
 # Enable logging
 logging.basicConfig(
@@ -160,9 +165,13 @@ def news_command(update: Update, context: CallbackContext) -> int:
             
         update.message.reply_text(news_message)
     
+    # Add feedback buttons after sending all news items
+    add_feedback_buttons(update, context, news_items)
+    
     # Provide a friendly closing message
     update.message.reply_text(
-        "That's all for now! Check back later for more updates or use /reset to change your preferences."
+        "That's all for now! Please provide feedback on these news items to help me improve my recommendations."
+        "\n\nCheck back later for more updates or use /reset to change your preferences."
     )
     
     return ConversationHandler.END
@@ -201,7 +210,8 @@ def help_command(update: Update, context: CallbackContext) -> None:
         "/news - Get the latest AI funding news\n"
         "/reset - Reset your preferences\n"
         "/help - Show this help message\n"
-        "/cancel - Cancel the current operation"
+        "/cancel - Cancel the current operation\n\n"
+        "After receiving news, you can provide feedback to help me improve my recommendations."
     )
 
 def main() -> None:
@@ -226,7 +236,17 @@ def main() -> None:
         fallbacks=[CommandHandler('cancel', cancel)]
     )
     
+    # Add feedback conversation handler
+    feedback_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(handle_feedback_callback, pattern=r'^(like|dislike)_\d+$')],
+        states={
+            WAITING_FOR_FEEDBACK_REASON: [MessageHandler(Filters.text & ~Filters.command, process_feedback_reason)]
+        },
+        fallbacks=[CommandHandler('cancel', cancel_feedback)]
+    )
+    
     dispatcher.add_handler(conv_handler)
+    dispatcher.add_handler(feedback_handler)
     
     # Add standalone command handlers
     dispatcher.add_handler(CommandHandler("help", help_command))
