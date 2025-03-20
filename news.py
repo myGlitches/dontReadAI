@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 from utils import fetch_from_hackernews, fetch_from_techcrunch, filter_by_keywords, rank_news_by_relevance
 
 
-def fetch_ai_news(user_preferences):
+def fetch_ai_news(user_id, user_preferences):
     """Fetch and filter AI news based on user preferences"""
     # Get raw news from sources
     all_news = []
@@ -14,6 +14,10 @@ def fetch_ai_news(user_preferences):
     
     # Apply first-level filtering based on keywords
     filtered_news = filter_by_keywords(all_news)
+    
+    # Filter out news the user has already seen
+    from db import has_viewed_news
+    filtered_news = [news for news in filtered_news if not has_viewed_news(user_id, news)]
     
     # Apply user preference filtering
     if user_preferences:
@@ -25,4 +29,10 @@ def fetch_ai_news(user_preferences):
         # Rank by relevance to interests
         filtered_news = rank_news_by_relevance(filtered_news, user_preferences)
     
-    return filtered_news[:5]  # Return top 5 results
+    # Record these news items as viewed after they've been selected
+    if filtered_news:
+        from db import add_viewed_news
+        for news in filtered_news[:5]:
+            add_viewed_news(user_id, news)
+    
+    return filtered_news[:5]
