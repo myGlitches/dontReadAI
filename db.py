@@ -15,6 +15,20 @@ def get_user(user_id):
         return response.data[0]
     return None
 
+def create_user(user_id, name, preferences=None):
+    """Create a new user in Supabase"""
+    if preferences is None:
+        preferences = {"platforms": ["twitter"], "interest": "AI"}
+    
+    user_data = {
+        "id": str(user_id),
+        "name": name,
+        "preferences": preferences
+    }
+    
+    response = supabase.table('users').insert(user_data).execute()
+    return response.data[0] if response.data else None
+
 def create_user_tag(user_id, tag, weight=0.7):
     """Create a new tag for a user"""
     try:
