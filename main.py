@@ -4,6 +4,7 @@ from db import get_user, create_user
 from news import fetch_ai_news
 from feedback import add_feedback_buttons, handle_feedback
 from preferences import initialize_preferences
+from config import TELEGRAM_TOKEN
 
 def start_command(update, context):
     """Start the bot and initialize user preferences"""
@@ -48,7 +49,7 @@ def news_command(update, context):
     add_feedback_buttons(update, context, news_items)
 
 def main():
-    updater = Updater("YOUR_TOKEN")
+    updater = Updater(TELEGRAM_TOKEN)
     dp = updater.dispatcher
     
     dp.add_handler(CommandHandler("start", start_command))
