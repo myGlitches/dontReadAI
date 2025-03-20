@@ -424,6 +424,16 @@ def main():
     updater = Updater(TELEGRAM_TOKEN)
     dp = updater.dispatcher
     
+    # Register command handlers first
+    dp.add_handler(CommandHandler("help", help_command))
+    dp.add_handler(CommandHandler("news", news_command))
+    dp.add_handler(CommandHandler("interests", interests_command))
+    dp.add_handler(CommandHandler("add_tag", add_tag_command))
+    dp.add_handler(CommandHandler("remove_tag", remove_tag_command))
+    dp.add_handler(CommandHandler("adjust_interest", adjust_interest_command))
+    dp.add_handler(CommandHandler("history", history_command))
+    dp.add_handler(CommandHandler("clear_history", clear_history_command))
+    
     # Add conversation handler for preference setup
     conv_handler = ConversationHandler(
         entry_points=[
@@ -434,13 +444,18 @@ def main():
             CHOOSING_INTEREST: [MessageHandler(Filters.text & ~Filters.command, save_interest)],
             GATHERING_INTERESTS: [MessageHandler(Filters.text & ~Filters.command, process_interests)]
         },
-        fallbacks=[CommandHandler('cancel', cancel)]
+        fallbacks=[
+            CommandHandler('cancel', cancel),
+            CommandHandler('help', help_command),  # Allow help during conversations
+            CommandHandler('news', news_command)   # Allow news during conversations
+        ]
     )
     
     dp.add_handler(conv_handler)
-    dp.add_handler(CommandHandler("news", news_command))
-    dp.add_handler(CommandHandler("help", help_command))
-    dp.add_handler(CallbackQueryHandler(handle_feedback))
+    
+    # Add callback query handlers
+    dp.add_handler(CallbackQueryHandler(handle_interest_callbacks, pattern='^(add_interest|reset_interests|clear_history)$'))
+    dp.add_handler(CallbackQueryHandler(handle_feedback, pattern='^(like_|dislike_|reason_)'))
     
     updater.start_polling()
     updater.idle()
