@@ -1,3 +1,4 @@
+# /main.py
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Updater, CommandHandler, MessageHandler, Filters,
@@ -5,9 +6,10 @@ from telegram.ext import (
 )
 import logging
 from config import TELEGRAM_TOKEN
-from db import get_user, create_user, update_user_preferences
+from db import get_user, create_user, update_user_preferences, create_user_tag
 from news import fetch_ai_tech_news
 from content import generate_social_post
+from ai_analysis import extract_interests_with_ai
 
 # Enable logging
 logging.basicConfig(
@@ -16,7 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Define conversation states
-CHOOSING_INTEREST, SELECT_NEWS, CHOOSING_PLATFORM = range(3)
+GATHERING_INTERESTS, CHOOSING_INTEREST, SELECT_NEWS, CHOOSING_PLATFORM = range(4)
 
 def start(update: Update, context: CallbackContext) -> int:
     """Start the conversation and ask for preferences."""
@@ -30,23 +32,52 @@ def start(update: Update, context: CallbackContext) -> int:
         # Create new user with default preferences
         create_user(user_id, user.first_name)
         
-        # Ask for interests
-        reply_keyboard = [['General AI', 'AI Research'], 
-                           ['AI Products', 'AI Business']]
-        
+        # Ask open-ended question
         update.message.reply_text(
-            f"Hi {user.first_name}! I'll help you create social media posts about AI news.\n\n"
-            "What specific AI topics interest you most?",
-            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+            f"Hi {user.first_name}! I'll help you create personalized social media posts about AI news.\n\n"
+            "Tell me briefly about your interest in AI - what specific topics, technologies, or news would be most valuable to you?",
+            reply_markup=ReplyKeyboardRemove()
         )
-        return CHOOSING_INTEREST
+        return GATHERING_INTERESTS
     else:
         # Welcome back existing user
         update.message.reply_text(
-            f"Welcome back {user.first_name}! Type /news to get today's AI news and create posts.",
+            f"Welcome back {user.first_name}! Type /news to get today's AI news tailored to your interests.",
             reply_markup=ReplyKeyboardRemove()
         )
         return ConversationHandler.END
+
+def process_interests(update: Update, context: CallbackContext) -> int:
+    """Process the user's open-ended response with AI."""
+    user_id = str(update.effective_user.id)
+    user_text = update.message.text
+    
+    # Let the user know we're processing
+    update.message.reply_text("Analyzing your interests... One moment please.")
+    
+    # Extract preferences using AI
+    preferences = extract_interests_with_ai(user_text)
+    
+    # Update user preferences in database
+    update_user_preferences(user_id, preferences)
+    
+    # Create tags for this user
+    for topic, weight in preferences["interests"].items():
+        create_user_tag(user_id, topic, weight)
+    
+    # Confirm and provide next steps
+    topics_list = list(preferences["interests"].keys())
+    topic_text = ", ".join(topics_list[:3])
+    if len(topics_list) > 3:
+        topic_text += f", and {len(topics_list)-3} more"
+        
+    update.message.reply_text(
+        f"Thanks! I'll focus on bringing you news about {topic_text}.\n\n"
+        f"I've identified your primary interest as a {preferences['role']} in the AI space.\n\n"
+        "Type /news anytime to get personalized AI updates.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return ConversationHandler.END
 
 def save_interest(update: Update, context: CallbackContext) -> int:
     """Save the selected interest to the database."""
@@ -87,16 +118,16 @@ def news_command(update: Update, context: CallbackContext) -> int:
         update.message.reply_text("Please use /start to set up your preferences first.")
         return ConversationHandler.END
     
-    # Fetch news
-    update.message.reply_text("Fetching the latest AI news... Give me a moment.")
-    news_items = fetch_ai_tech_news()
+    # Fetch news based on user preferences
+    update.message.reply_text("Fetching the latest AI news tailored to your interests... Give me a moment.")
+    news_items = fetch_ai_tech_news(user_data.get('preferences'))
     
     if not news_items:
         update.message.reply_text("I couldn't find any relevant AI news right now. Please try again later.")
         return ConversationHandler.END
     
     # Send news summary
-    update.message.reply_text("Here's today's AI news summary:")
+    update.message.reply_text("Here's today's AI news summary customized for you:")
     
     for i, item in enumerate(news_items, 1):
         update.message.reply_text(f"{i}. {item['title']}\nSource: {item['source']}\nURL: {item['url']}")
@@ -143,7 +174,7 @@ def generate_post(update: Update, context: CallbackContext) -> int:
     
     # Get user preferences
     user_data = get_user(user_id)
-    user_interest = user_data.get('preferences', {}).get('interest', 'general')
+    user_preferences = user_data.get('preferences', {})
     
     # Get selected news
     selected_news = context.user_data.get('selected_news')
@@ -152,8 +183,8 @@ def generate_post(update: Update, context: CallbackContext) -> int:
         return ConversationHandler.END
     
     # Generate post
-    update.message.reply_text("Creating your social media post...")
-    post = generate_social_post(selected_news, platform, user_interest)
+    update.message.reply_text("Creating your personalized social media post...")
+    post = generate_social_post(selected_news, platform, user_preferences)
     
     # Show generated post
     update.message.reply_text(
@@ -185,9 +216,10 @@ def main() -> None:
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler('start', start),
-            CommandHandler('news', news_command)  # Add news command as entry point
+            CommandHandler('news', news_command)
         ],
         states={
+            GATHERING_INTERESTS: [MessageHandler(Filters.text & ~Filters.command, process_interests)],
             CHOOSING_INTEREST: [MessageHandler(Filters.text & ~Filters.command, save_interest)],
             SELECT_NEWS: [MessageHandler(Filters.text & ~Filters.command, select_news)],
             CHOOSING_PLATFORM: [MessageHandler(Filters.text & ~Filters.command, generate_post)]

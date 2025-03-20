@@ -1,3 +1,4 @@
+# /content.py
 import openai
 import logging
 from config import OPENAI_API_KEY
@@ -9,26 +10,39 @@ logger = logging.getLogger(__name__)
 # Set OpenAI API key
 openai.api_key = OPENAI_API_KEY
 
-def generate_social_post(news_item, platform, user_interest):
-    """Generate social media post using OpenAI"""
+def generate_social_post(news_item, platform, user_preferences):
+    """Generate social media post using OpenAI based on user preferences"""
     
     # Log that we're starting content generation
     logger.info(f"Generating content for platform: {platform}, news item: {news_item['title']}")
     
-    platform_prompts = {
-        "twitter": f"Create a Twitter post (max 280 chars) about this AI news: '{news_item['title']}'. Focus on {user_interest} aspects. Include 2-3 relevant hashtags.",
-        "linkedin": f"Create a short LinkedIn post (under 400 chars) about this AI news: '{news_item['title']}'. Focus on {user_interest} aspects. Keep it professional but engaging.",
-        "reddit": f"Create a Reddit post title and short body text about this AI news: '{news_item['title']}'. Focus on {user_interest} aspects. Make it suitable for an AI/tech subreddit."
-    }
+    # Extract user preferences
+    role = user_preferences.get('role', 'general')
+    technical_level = user_preferences.get('technical_level', 'intermediate')
+    content_length = user_preferences.get('content_length', 'balanced')
     
-    prompt = platform_prompts.get(platform.lower(), platform_prompts["twitter"])
+    # Build a personalized prompt
+    platform_style = {
+        "twitter": "brief, engaging, max 280 chars",
+        "linkedin": "professional, insightful",
+        "reddit": "conversational, detailed with a catchy title"
+    }.get(platform.lower(), "concise, informative")
+    
+    prompt = f"""
+    Create a {platform} post about this AI news: '{news_item['title']}'. 
+    URL: {news_item['url']}
+    
+    Tailor this for a {role} with {technical_level} technical knowledge.
+    Make it {platform_style} and {content_length} in detail.
+    Include 2-3 relevant hashtags.
+    """
     
     try:
         logger.info("Calling OpenAI API")
         response = openai.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are an AI assistant that creates engaging, concise social media posts about AI news."},
+                {"role": "system", "content": "You are an AI assistant that creates engaging, personalized social media posts about AI news."},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=350,
@@ -37,8 +51,7 @@ def generate_social_post(news_item, platform, user_interest):
         generated_text = response.choices[0].message.content
         logger.info(f"Successfully generated content: {generated_text[:50]}...")
         
-        # Always include the URL in the return
-        return f"{generated_text}\n\nLink: {news_item.get('url', '')}"
+        return generated_text
     except Exception as e:
         error_msg = f"Error generating content: {str(e)}"
         logger.error(error_msg)
