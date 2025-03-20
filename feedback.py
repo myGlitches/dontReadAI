@@ -43,6 +43,9 @@ def add_feedback_buttons(update: Update, context: CallbackContext, news_items):
             f"Was this news item relevant to your interests?",
             reply_markup=reply_markup
         )
+        
+        # Log the callback data for debugging
+        logger.info(f"Created feedback buttons with callback data: {like_callback}, {dislike_callback}")
 
 def handle_feedback_callback(update: Update, context: CallbackContext) -> int:
     """Handle feedback button callbacks"""

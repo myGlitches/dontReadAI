@@ -131,121 +131,147 @@ def ai_rank_stories(stories, user_preferences):
                 "technical_level": "intermediate"
             }
         
-        # Extract user role and interests for the AI
-        user_role = user_preferences.get("role", "investor")
+        # Safely extract user role
+        user_role = str(user_preferences.get("role", "investor"))
         
-        # Handle case where interests might not be a dictionary
+        # Safely handle interests
         interests_dict = user_preferences.get("interests", {})
         if not isinstance(interests_dict, dict) or not interests_dict:
             interests_dict = {"ai_funding": 1.0}
         
-        user_interests = list(interests_dict.keys())
-        technical_level = user_preferences.get("technical_level", "intermediate")
+        # Convert interests to a string, with fallback
+        try:
+            interests_str = ', '.join(map(str, interests_dict.keys()))
+        except Exception as e:
+            logger.error(f"Error converting interests to string: {e}")
+            interests_str = "AI funding"
+        
+        # Safely get technical level
+        technical_level = str(user_preferences.get("technical_level", "intermediate"))
         
         # Create a condensed summary of stories to avoid token limits
         story_summaries = []
         for i, story in enumerate(stories):
-            summary = {
-                "id": i,
-                "title": story.get("title", ""),
-                "source": story.get("source", ""),
-                "days_old": story.get("days_old", 0)
-            }
-            story_summaries.append(summary)
+            try:
+                summary = {
+                    "id": i,
+                    "title": str(story.get("title", "")),
+                    "source": str(story.get("source", "")),
+                    "days_old": int(story.get("days_old", 0))
+                }
+                story_summaries.append(summary)
+            except Exception as e:
+                logger.error(f"Error processing story summary {i}: {e}")
         
         # Guard against empty lists
         if not story_summaries:
             logger.warning("No stories to rank with AI")
             return stories
         
-        # Create safe string for interests that won't cause format errors
-        interests_str = ""
-        try:
-            interests_str = ', '.join(user_interests)
-        except Exception as e:
-            logger.error(f"Error joining interests: {e}")
-            interests_str = "AI funding"
+        # Detailed logging of input data
+        logger.info(f"User Role: {user_role}")
+        logger.info(f"Technical Level: {technical_level}")
+        logger.info(f"User Interests: {interests_str}")
+        logger.info(f"Number of story summaries: {len(story_summaries)}")
         
-        # Create the prompt for AI ranking with safe string formatting
-        prompt = """
+        # Create the prompt with safe string formatting
+        prompt = f"""
         You are an AI news curator specializing in AI funding and investment news.
-        
+
         USER PROFILE:
-        - Role: {}
-        - Technical level: {}
-        - Interests: {}
-        
+        - Role: {user_role}
+        - Technical level: {technical_level}
+        - Interests: {interests_str}
+
         TASK:
         Rank the following AI funding news stories based on:
         1. Relevance to AI funding/investment
         2. Recency (newer is better)
         3. Relevance to the user's interests and role
         4. Importance in the AI ecosystem
-        
+
         NEWS STORIES:
-        {}
-        
+        {json.dumps(story_summaries, indent=2)}
+
         Return a JSON array of story IDs in ranked order (best first), with a 1-sentence explanation for each ranking:
         [
-          {{"id": story_id, "explanation": "Brief reason for ranking"}},
-          ...
+        {{"id": story_id, "explanation": "Brief reason for ranking"}},
+        ...
         ]
-        
+
         Only include stories truly relevant to AI funding and investment.
-        """.format(user_role, technical_level, interests_str, json.dumps(story_summaries, indent=2))
+        """
+        logger.info("Full Prompt:")
+        logger.info(prompt)
         
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are an AI news curator specializing in AI funding."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.2,
-            response_format={"type": "json_object"}
-        )
-        
-        # Parse the AI's ranking
         try:
-            ranking_data = json.loads(response.choices[0].message.content)
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You are an AI news curator specializing in AI funding."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.2,
+                response_format={"type": "json_object"}
+            )
             
-            # Check if the response has the expected format
-            if not isinstance(ranking_data, list):
-                logger.error("AI ranking response is not a list")
-                return stories
+            # Log the raw response
+            logger.info("Raw AI Response:")
+            logger.info(response.choices[0].message.content)
+            
+            # Parse the AI's ranking
+            try:
+                ranking_data = json.loads(response.choices[0].message.content)
                 
-            ranked_ids = []
-            for item in ranking_data:
-                if isinstance(item, dict) and "id" in item:
-                    ranked_ids.append(item["id"])
+                # Detailed logging of ranking data
+                logger.info("Parsed Ranking Data:")
+                logger.info(json.dumps(ranking_data, indent=2))
+                
+                # Validate the ranking data
+                if not isinstance(ranking_data, list):
+                    logger.error("AI ranking response is not a list")
+                    return stories
+                
+                # Extract ranked story IDs
+                ranked_ids = []
+                for item in ranking_data:
+                    if isinstance(item, dict) and "id" in item:
+                        ranked_ids.append(item["id"])
+                
+                # Reorder stories based on AI ranking
+                ranked_stories = []
+                for story_id in ranked_ids:
+                    if story_id < len(stories):
+                        story = stories[story_id]
+                        # Add the AI's explanation to the story
+                        matching_items = [item for item in ranking_data if item.get("id") == story_id]
+                        if matching_items:
+                            story["ai_explanation"] = matching_items[0].get("explanation", "Relevant AI funding news")
+                        ranked_stories.append(story)
+                
+                # Add any stories that weren't ranked at the end
+                for i, story in enumerate(stories):
+                    if i not in ranked_ids:
+                        ranked_stories.append(story)
+                
+                logger.info(f"Successfully ranked {len(ranked_stories)} stories with AI")
+                return ranked_stories
             
-            # Reorder stories based on AI ranking
-            ranked_stories = []
-            for story_id in ranked_ids:
-                if story_id < len(stories):
-                    story = stories[story_id]
-                    # Add the AI's explanation to the story
-                    matching_items = [item for item in ranking_data if item.get("id") == story_id]
-                    if matching_items:
-                        story["ai_explanation"] = matching_items[0].get("explanation", "Relevant AI funding news")
-                    ranked_stories.append(story)
-            
-            # Add any stories that weren't ranked at the end
-            for i, story in enumerate(stories):
-                if i not in ranked_ids:
-                    ranked_stories.append(story)
-                    
-            logger.info(f"Successfully ranked {len(ranked_stories)} stories with AI")
-            return ranked_stories
-            
+            except json.JSONDecodeError as je:
+                logger.error(f"JSON Decode Error: {je}")
+                logger.error(f"Problematic content: {response.choices[0].message.content}")
+                return stories
+            except Exception as e:
+                logger.error(f"Error parsing AI ranking response: {str(e)}")
+                return stories
+        
         except Exception as e:
-            logger.error(f"Error parsing AI ranking response: {str(e)}")
-            # Fall back to simple sorting by date and relevance
-            return sorted(stories, key=lambda x: (x.get('days_old', 999), -x.get('relevance', 0)))
-            
+            logger.error(f"Error during AI response generation: {str(e)}")
+            return stories
+    
     except Exception as e:
-        logger.error(f"Error during AI ranking: {str(e)}")
-        # Fall back to simple sorting by date and relevance
-        return sorted(stories, key=lambda x: (x.get('days_old', 999), -x.get('relevance', 0)))
+        logger.error(f"Unexpected error in ai_rank_stories: {str(e)}")
+        return stories
 
 def fetch_from_hackernews(ai_keywords, funding_keywords, exclude_keywords):
     """Fetch AI funding news from HackerNews API"""
