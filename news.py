@@ -1,18 +1,22 @@
+# /news.py
 import requests
 import logging
 import json
 from datetime import datetime, timedelta
 import time
-import random
 from bs4 import BeautifulSoup
-import re
+from openai import OpenAI
+from config import OPENAI_API_KEY
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Initialize OpenAI client
+client = OpenAI(api_key=OPENAI_API_KEY)
+
 def fetch_ai_tech_news(user_preferences=None):
-    """Fetch AI funding news from multiple sources"""
+    """Fetch AI funding news from multiple sources, with AI ranking and recency filtering"""
     # Define keywords for filtering
     ai_keywords = ['ai', 'artificial intelligence', 'machine learning', 'ml', 'llm', 
                   'gpt', 'chatgpt', 'openai', 'anthropic', 'claude', 'deep learning']
@@ -39,14 +43,132 @@ def fetch_ai_tech_news(user_preferences=None):
     cb_stories = fetch_from_crunchbase(ai_keywords, funding_keywords)
     all_stories.extend(cb_stories)
     
-    # Sort all stories by relevance and then by score/date
-    sorted_stories = sorted(all_stories, key=lambda x: (x.get('relevance', 0), x.get('score', 0)), reverse=True)
+    # Filter for recency - only stories from the last 2 days
+    today = datetime.now().date()
+    recent_stories = []
+    for story in all_stories:
+        try:
+            story_date = datetime.strptime(story['date'], '%Y-%m-%d').date()
+            days_old = (today - story_date).days
+            
+            if days_old <= 2:  # Only include stories up to 2 days old
+                # Add days_old to the story data
+                story['days_old'] = days_old
+                recent_stories.append(story)
+        except Exception as e:
+            logger.error(f"Error parsing date for story {story.get('title', 'Unknown')}: {str(e)}")
     
-    # If no stories found, log a message
-    if not sorted_stories:
-        logger.info("No AI funding stories found across any sources")
+    # If we have recent stories, rank them with AI
+    if recent_stories:
+        ranked_stories = ai_rank_stories(recent_stories, user_preferences)
+        return ranked_stories[:5]  # Return top 5 AI-ranked and recent stories
+    else:
+        logger.info("No recent AI funding stories found within the last 2 days")
+        # Fall back to most recent stories if nothing in the last 2 days
+        sorted_stories = sorted(all_stories, 
+                               key=lambda x: datetime.strptime(x['date'], '%Y-%m-%d').date() 
+                               if 'date' in x else datetime.now().date(), 
+                               reverse=True)
+        return sorted_stories[:3]  # Return top 3 most recent
+
+def ai_rank_stories(stories, user_preferences):
+    """Use AI to rank stories based on relevance, recency, and user preferences"""
+    try:
+        # Default to general investor if no preferences
+        if not user_preferences:
+            user_preferences = {
+                "role": "investor",
+                "interests": {"ai_funding": 1.0},
+                "technical_level": "intermediate"
+            }
         
-    return sorted_stories[:10]  # Return top 10 stories
+        # Extract user role and interests for the AI
+        user_role = user_preferences.get("role", "investor")
+        user_interests = list(user_preferences.get("interests", {}).keys())
+        technical_level = user_preferences.get("technical_level", "intermediate")
+        
+        # Create a condensed summary of stories to avoid token limits
+        story_summaries = []
+        for i, story in enumerate(stories):
+            summary = {
+                "id": i,
+                "title": story.get("title", ""),
+                "source": story.get("source", ""),
+                "days_old": story.get("days_old", 0)
+            }
+            story_summaries.append(summary)
+        
+        # Create the prompt for AI ranking
+        prompt = f"""
+        You are an AI news curator specializing in AI funding and investment news.
+        
+        USER PROFILE:
+        - Role: {user_role}
+        - Technical level: {technical_level}
+        - Interests: {', '.join(user_interests)}
+        
+        TASK:
+        Rank the following AI funding news stories based on:
+        1. Relevance to AI funding/investment
+        2. Recency (newer is better)
+        3. Relevance to the user's interests and role
+        4. Importance in the AI ecosystem
+        
+        NEWS STORIES:
+        {json.dumps(story_summaries, indent=2)}
+        
+        Return a JSON array of story IDs in ranked order (best first), with a 1-sentence explanation for each ranking:
+        [
+          {"id": story_id, "explanation": "Brief reason for ranking"},
+          ...
+        ]
+        
+        Only include stories truly relevant to AI funding and investment.
+        """
+        
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are an AI news curator specializing in AI funding."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.2,
+            response_format={"type": "json_object"}
+        )
+        
+        # Parse the AI's ranking
+        try:
+            ranking_data = json.loads(response.choices[0].message.content)
+            ranked_ids = [item["id"] for item in ranking_data]
+            
+            # Reorder stories based on AI ranking
+            ranked_stories = []
+            for story_id in ranked_ids:
+                if story_id < len(stories):
+                    story = stories[story_id]
+                    # Add the AI's explanation to the story
+                    matching_items = [item for item in ranking_data if item["id"] == story_id]
+                    if matching_items:
+                        story["ai_explanation"] = matching_items[0]["explanation"]
+                    ranked_stories.append(story)
+            
+            # Add any stories that weren't ranked at the end
+            for i, story in enumerate(stories):
+                if i not in ranked_ids:
+                    ranked_stories.append(story)
+                    
+            logger.info(f"Successfully ranked {len(ranked_stories)} stories with AI")
+            return ranked_stories
+            
+        except Exception as e:
+            logger.error(f"Error parsing AI ranking response: {str(e)}")
+            # Fall back to simple sorting by date and relevance
+            return sorted(stories, key=lambda x: (x.get('days_old', 999), -x.get('relevance', 0)))
+            
+    except Exception as e:
+        logger.error(f"Error during AI ranking: {str(e)}")
+        # Fall back to simple sorting by date and relevance
+        return sorted(stories, key=lambda x: (x.get('days_old', 999), -x.get('relevance', 0)))
 
 def fetch_from_hackernews(ai_keywords, funding_keywords):
     """Fetch AI funding news from HackerNews API"""

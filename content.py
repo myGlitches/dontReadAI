@@ -40,7 +40,7 @@ def generate_social_post(news_item, platform, user_preferences):
     try:
         logger.info("Calling OpenAI API")
         response = openai.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are an AI assistant that creates engaging, personalized social media posts about AI news."},
                 {"role": "user", "content": prompt}

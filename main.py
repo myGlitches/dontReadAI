@@ -86,24 +86,31 @@ def save_interest(update: Update, context: CallbackContext) -> int:
     user_id = str(update.effective_user.id)
     selected_option = update.message.text
     
-    # For now, we only have one option: AI Funding News
+    if selected_option == 'Custom Preferences':
+        update.message.reply_text(
+            "Great! Please tell me more about your interests in AI funding and investment.\n\n"
+            "For example, you might say: \"I'm a VC interested in early-stage AI startups, "
+            "especially in healthcare, NLP, and computer vision. I prefer detailed technical news.\""
+        )
+        return GATHERING_INTERESTS
+    
+    # For 'AI Funding News' option
     preferences = {
-        "platforms": ["twitter"],  # Default platform
+        "role": "investor",
         "news_focus": "funding",
         "interests": {
-            "ai_funding": 1.0  # Use a single tag to avoid duplicates
+            "ai_funding": 1.0,
+            "venture capital": 0.9,
+            "startups": 0.8
         },
-        "role": "investor"
+        "technical_level": "intermediate",
+        "recency_preference": 2  # Default to last 2 days
     }
     
     # Update user preferences in database
     update_user_preferences(user_id, preferences)
     
-    # Create a single tag for this user - avoid creating multiple tags that could cause conflicts
-    # First, clear any existing tags for this user (optional)
-    # delete_user_tags(user_id)  # Implement this function if needed
-    
-    # Create the main tag
+    # Create a single tag for this user
     create_user_tag(user_id, "ai_funding", 1.0)
     
     # Provide confirmation
@@ -127,29 +134,35 @@ def news_command(update: Update, context: CallbackContext) -> int:
         return ConversationHandler.END
     
     # Fetch news based on user preferences
-    update.message.reply_text("Fetching the latest AI news tailored to your interests... Give me a moment.")
+    update.message.reply_text("Fetching the latest AI funding news tailored to your interests... Give me a moment.")
+    
     news_items = fetch_ai_tech_news(user_data.get('preferences'))
     
     if not news_items:
-        update.message.reply_text("I couldn't find any relevant AI news right now. Please try again later.")
+        update.message.reply_text("I couldn't find any relevant AI funding news right now. Please try again later.")
         return ConversationHandler.END
     
-    # Send news summary
-    update.message.reply_text("Here's today's AI news summary customized for you:")
+    # Send news summary - now with relevance explanations if available
+    update.message.reply_text("Here's today's AI funding news customized for your interests:")
     
     for i, item in enumerate(news_items, 1):
-        update.message.reply_text(f"{i}. {item['title']}\nSource: {item['source']}\nURL: {item['url']}")
+        news_message = f"{i}. {item['title']}\n"
+        news_message += f"Source: {item['source']}\n"
+        news_message += f"Date: {item['date']}\n"
+        news_message += f"URL: {item['url']}\n"
+        
+        # Add AI explanation if available
+        if 'ai_explanation' in item:
+            news_message += f"\nRelevance: {item['ai_explanation']}\n"
+            
+        update.message.reply_text(news_message)
     
-    # Store news items in context
-    context.user_data['news_items'] = news_items
-    
-    # Ask which news to create post for
-    reply_keyboard = [[str(i)] for i in range(1, len(news_items) + 1)]
+    # Provide a friendly closing message
     update.message.reply_text(
-        "Reply with the number of the news item you'd like to create a post for:",
-        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        "That's all for now! Check back later for more updates or use /reset to change your preferences."
     )
-    return SELECT_NEWS
+    
+    return ConversationHandler.END
 
 def select_news(update: Update, context: CallbackContext) -> int:
     """Handle the news selection and ask for platform."""
@@ -223,15 +236,27 @@ def reset_command(update: Update, context: CallbackContext) -> int:
     # Clear all user tags to prevent duplicate key errors
     # delete_user_tags(user_id)  # Implement this function if needed
     
-    # Offer only AI Funding News
-    reply_keyboard = [['AI Funding News']]
+    # Offer AI Funding News or Custom
+    reply_keyboard = [['AI Funding News'], ['Custom Preferences']]
     
     update.message.reply_text(
         f"Hi {user.first_name}! I've reset your preferences. Let's start over.\n\n"
-        "Currently, we offer specialized AI Funding News updates.",
+        "Choose from our standard AI Funding News or set custom preferences.",
         reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
     )
     return CHOOSING_INTEREST
+
+
+def help_command(update: Update, context: CallbackContext) -> None:
+    """Send a message when the command /help is issued."""
+    update.message.reply_text(
+        "Here's how to use the AI Funding News Bot:\n\n"
+        "/start - Begin or restart the bot\n"
+        "/news - Get the latest AI funding news\n"
+        "/reset - Reset your preferences\n"
+        "/help - Show this help message\n"
+        "/cancel - Cancel the current operation"
+    )
 
 def main() -> None:
     """Start the bot."""
@@ -250,13 +275,15 @@ def main() -> None:
         ],
         states={
             CHOOSING_INTEREST: [MessageHandler(Filters.text & ~Filters.command, save_interest)],
-            SELECT_NEWS: [MessageHandler(Filters.text & ~Filters.command, select_news)],
-            CHOOSING_PLATFORM: [MessageHandler(Filters.text & ~Filters.command, generate_post)]
+            GATHERING_INTERESTS: [MessageHandler(Filters.text & ~Filters.command, process_interests)]
         },
         fallbacks=[CommandHandler('cancel', cancel)]
     )
     
     dispatcher.add_handler(conv_handler)
+    
+    # Add standalone command handlers
+    dispatcher.add_handler(CommandHandler("help", help_command))
     
     # Start the Bot
     updater.start_polling()
