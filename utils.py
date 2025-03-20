@@ -233,14 +233,34 @@ def help_command(update, context):
         "/start - Initialize the bot and set up preferences\n"
         "/news - Get your personalized AI funding news\n"
         # "/interests - View your current interest topics\n"
-        # "/add_tag <tag> [weight] - Add a new interest (e.g., /add_tag computer_vision 0.9)\n"
-        # "/remove_tag <tag> - Remove an interest (e.g., /remove_tag blockchain)\n"
-        # "/adjust_interest <tag> <weight> - Change priority of an interest\n"
+        # "/add\\_tag TAG \[weight\] - Add a new interest (e.g., /add\\_tag computer\\_vision 0.9)\n"
+        # "/remove\\_tag TAG - Remove an interest (e.g., /remove\\_tag blockchain)\n"
+        # "/adjust\\_interest TAG WEIGHT - Change priority of an interest\n"
         "/history - View your recently read news\n"
-        "/clear_history - Clear your news history\n"
+        "/clear\\_history - Clear your news history\n"
         "/reset - Reset your preferences and start over\n"
         "/help - Show this help message\n\n"
         "You can also provide feedback on news items to improve recommendations."
     )
     
-    update.message.reply_text(help_text, parse_mode='Markdown')
+    try:
+        update.message.reply_text(help_text, parse_mode='MarkdownV2')
+    except Exception as e:
+        # Fallback to plain text if Markdown fails
+        fallback_text = (
+            "🤖 AI Funding News Bot 🤖\n\n"
+            "Get personalized AI funding and investment news.\n\n"
+            "Available Commands:\n"
+            "/start - Initialize the bot and set up preferences\n"
+            "/news - Get your personalized AI funding news\n"
+            "/interests - View your current interest topics\n"
+            "/add_tag TAG [weight] - Add a new interest\n"
+            "/remove_tag TAG - Remove an interest\n"
+            "/adjust_interest TAG WEIGHT - Change priority of an interest\n"
+            "/history - View your recently read news\n"
+            "/clear_history - Clear your news history\n"
+            "/reset - Reset your preferences and start over\n"
+            "/help - Show this help message\n\n"
+            "You can also provide feedback on news items to improve recommendations."
+        )
+        update.message.reply_text(fallback_text)
