@@ -43,6 +43,18 @@ def create_user_tag(user_id, tag, weight=0.7):
     except Exception as e:
         logger.error(f"Error creating user tag: {str(e)}")
         return None
+    
+def update_user_tags(user_id, tags_dict):
+    """Update user tags all at once in the preferences field"""
+    # Get current preferences
+    user = get_user(user_id)
+    preferences = user.get('preferences', {}) if user else {}
+    
+    # Update the interests section
+    preferences['interests'] = tags_dict
+    
+    # Save back to database
+    return update_user_preferences(user_id, preferences)
 
 def update_user_preferences(user_id, preferences):
     """Update user preferences in Supabase"""
@@ -75,9 +87,12 @@ def create_user_tag(user_id, tag, weight=1.0):
             return None
 
 def get_user_tags(user_id):
-    """Get all tags for a user"""
-    response = supabase.table('user_tags').select('*').eq('user_id', str(user_id)).execute()
-    return response.data if response.data else []
+    """Get all tags for a user from preferences"""
+    user = get_user(user_id)
+    if not user or 'preferences' not in user:
+        return {}
+    
+    return user['preferences'].get('interests', {})
 
 def update_tag_weight(user_id, tag, new_weight):
     """Update the weight of a user tag"""
@@ -85,10 +100,12 @@ def update_tag_weight(user_id, tag, new_weight):
     return response.data[0] if response.data else None
 
 def delete_user_tags(user_id):
-    """Delete all tags for a specific user."""
-    try:
-        response = supabase.table('user_tags').delete().eq('user_id', user_id).execute()
-        return response.data
-    except Exception as e:
-        logger.error(f"Error deleting user tags: {str(e)}")
+    """Clear user tags by updating preferences"""
+    user = get_user(user_id)
+    if not user:
         return None
+        
+    preferences = user.get('preferences', {})
+    preferences['interests'] = {}
+    
+    return update_user_preferences(user_id, preferences)

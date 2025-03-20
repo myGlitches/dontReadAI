@@ -1,7 +1,7 @@
 # main.py
 from telegram import ReplyKeyboardMarkup  # Add this import
 from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, Filters
-from db import get_user, create_user, update_user_preferences
+from db import get_user, create_user, update_user_preferences, create_user_tag, delete_user_tags
 from news import fetch_ai_news
 from feedback import add_feedback_buttons, handle_feedback
 from preferences import initialize_preferences
@@ -66,7 +66,6 @@ def save_interest(update, context):
         )
         return GATHERING_INTERESTS
     
-    # For 'AI Funding News' option - set default preferences
     preferences = {
         "interests": {
             "ai_funding": 1.0,
@@ -77,8 +76,28 @@ def save_interest(update, context):
         "technical_level": "intermediate"
     }
     
-    # Update user preferences in database
-    update_user_preferences(user_id, preferences)
+    try:
+        # Update user preferences in database
+        update_user_preferences(user_id, preferences)
+        
+        try:
+            # First clear existing tags - if function exists
+            delete_user_tags(user_id)
+        except Exception as e:
+            print(f"Warning: Could not delete existing tags: {e}")
+        
+        # Create tags for this user
+        for topic, weight in preferences["interests"].items():
+            try:
+                create_user_tag(user_id, topic, weight)
+            except Exception as e:
+                print(f"Warning: Could not create tag '{topic}': {e}")
+    except Exception as e:
+        print(f"Error updating preferences: {e}")
+        update.message.reply_text(
+            "Sorry, there was an error saving your preferences. Please try again."
+        )
+        return ConversationHandler.END
     
     # Provide confirmation
     update.message.reply_text(
@@ -127,6 +146,13 @@ def process_interests(update, context):
     # Update user preferences
     update_user_preferences(user_id, preferences)
     
+    # First clear existing tags
+    delete_user_tags(user_id)
+    
+    # Create tags for this user
+    for topic, weight in interests.items():
+        create_user_tag(user_id, topic, weight)
+    
     # Confirm and provide next steps
     topics = list(interests.keys())
     topic_text = ", ".join(topics[:3])
@@ -158,6 +184,9 @@ def reset_preferences(update, context):
     }
     
     update_user_preferences(user_id, empty_preferences)
+    
+    # Clear all user tags
+    delete_user_tags(user_id)
     
     # Offer choice again
     reply_keyboard = [['AI Funding News'], ['Custom Preferences']]
