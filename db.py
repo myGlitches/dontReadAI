@@ -49,16 +49,30 @@ def update_user_preferences(user_id, preferences):
     response = supabase.table('users').update({"preferences": preferences}).eq('id', str(user_id)).execute()
     return response.data[0] if response.data else None
 
-def create_user_tag(user_id, tag, weight=0.7):
-    """Create a new tag for a user"""
+def create_user_tag(user_id, tag, weight=1.0):
+    """Create a new tag for a user, with conflict handling."""
     tag_data = {
-        "user_id": str(user_id),
-        "tag": tag.lower(),
+        "user_id": user_id,
+        "tag": tag,
         "weight": weight
     }
     
-    response = supabase.table('user_tags').insert(tag_data).execute()
-    return response.data[0] if response.data else None
+    try:
+        # Try to delete any existing tag with the same name first
+        supabase.table('user_tags').delete().eq('user_id', user_id).eq('tag', tag).execute()
+        
+        # Then insert the new tag
+        response = supabase.table('user_tags').insert(tag_data).execute()
+        return response.data
+    except Exception as e:
+        logger.error(f"Error creating user tag: {str(e)}")
+        # If there was an error, try updating instead
+        try:
+            response = supabase.table('user_tags').update({"weight": weight}).eq('user_id', user_id).eq('tag', tag).execute()
+            return response.data
+        except Exception as e2:
+            logger.error(f"Error updating user tag: {str(e2)}")
+            return None
 
 def get_user_tags(user_id):
     """Get all tags for a user"""
@@ -69,3 +83,12 @@ def update_tag_weight(user_id, tag, new_weight):
     """Update the weight of a user tag"""
     response = supabase.table('user_tags').update({"weight": new_weight}).eq('user_id', str(user_id)).eq('tag', tag.lower()).execute()
     return response.data[0] if response.data else None
+
+def delete_user_tags(user_id):
+    """Delete all tags for a specific user."""
+    try:
+        response = supabase.table('user_tags').delete().eq('user_id', user_id).execute()
+        return response.data
+    except Exception as e:
+        logger.error(f"Error deleting user tags: {str(e)}")
+        return None

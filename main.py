@@ -32,22 +32,19 @@ def start(update: Update, context: CallbackContext) -> int:
         # Create new user with default preferences
         create_user(user_id, user.first_name)
         
-        # Offer defined categories with keyboard buttons
-        reply_keyboard = [
-            ['General AI News'],
-            ['AI Funding News']
-        ]
+        # Offer AI Funding News as the only option
+        reply_keyboard = [['AI Funding News']]
         
         update.message.reply_text(
             f"Hi {user.first_name}! I'll help you stay updated on AI news.\n\n"
-            "What type of AI news are you most interested in?",
+            "Currently, we offer specialized AI Funding News updates.",
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
         )
         return CHOOSING_INTEREST
     else:
         # Welcome back existing user
         update.message.reply_text(
-            f"Welcome back {user.first_name}! Type /news to get today's AI news tailored to your interests.",
+            f"Welcome back {user.first_name}! Type /news to get today's AI funding news.",
             reply_markup=ReplyKeyboardRemove()
         )
         return ConversationHandler.END
@@ -89,50 +86,33 @@ def save_interest(update: Update, context: CallbackContext) -> int:
     user_id = str(update.effective_user.id)
     selected_option = update.message.text
     
-    # Map the text selection to preference settings
+    # For now, we only have one option: AI Funding News
     preferences = {
-        "platforms": ["twitter"],
-        "interests": {}
+        "platforms": ["twitter"],  # Default platform
+        "news_focus": "funding",
+        "interests": {
+            "ai_funding": 1.0  # Use a single tag to avoid duplicates
+        },
+        "role": "investor"
     }
-    
-    if selected_option == "AI Funding News":
-        preferences["news_focus"] = "funding"
-        preferences["interests"] = {
-            "funding": 1.0,
-            "investment": 0.9,
-            "venture capital": 0.8
-        }
-        preferences["role"] = "investor"
-    else:  # General AI News
-        preferences["news_focus"] = "general"
-        preferences["interests"] = {
-            "AI": 0.8,
-            "machine learning": 0.7,
-            "technology": 0.6
-        }
-        preferences["role"] = "general"
     
     # Update user preferences in database
     update_user_preferences(user_id, preferences)
     
-    # Create tags for this user
-    for topic, weight in preferences["interests"].items():
-        create_user_tag(user_id, topic, weight)
+    # Create a single tag for this user - avoid creating multiple tags that could cause conflicts
+    # First, clear any existing tags for this user (optional)
+    # delete_user_tags(user_id)  # Implement this function if needed
     
-    # Provide confirmation based on selection
-    if selected_option == "AI Funding News":
-        update.message.reply_text(
-            "Great! I'll focus on finding AI funding news for you.\n\n"
-            "This includes investments, fundraising rounds, and venture capital activity in the AI space.\n\n"
-            "Type /news anytime to get the latest AI funding updates.",
-            reply_markup=ReplyKeyboardRemove()
-        )
-    else:
-        update.message.reply_text(
-            "Great! I'll bring you general AI news across various topics.\n\n"
-            "Type /news anytime to get the latest AI updates.",
-            reply_markup=ReplyKeyboardRemove()
-        )
+    # Create the main tag
+    create_user_tag(user_id, "ai_funding", 1.0)
+    
+    # Provide confirmation
+    update.message.reply_text(
+        "Great! I'll focus on finding AI funding news for you.\n\n"
+        "This includes investments, fundraising rounds, and venture capital activity in the AI space.\n\n"
+        "Type /news anytime to get the latest AI funding updates.",
+        reply_markup=ReplyKeyboardRemove()
+    )
     
     return ConversationHandler.END
 
@@ -240,15 +220,15 @@ def reset_command(update: Update, context: CallbackContext) -> int:
     # Reset their preferences to empty/default
     update_user_preferences(user_id, {})
     
-    # Offer defined categories with keyboard buttons
-    reply_keyboard = [
-        ['General AI News'],
-        ['AI Funding News']
-    ]
+    # Clear all user tags to prevent duplicate key errors
+    # delete_user_tags(user_id)  # Implement this function if needed
+    
+    # Offer only AI Funding News
+    reply_keyboard = [['AI Funding News']]
     
     update.message.reply_text(
         f"Hi {user.first_name}! I've reset your preferences. Let's start over.\n\n"
-        "What type of AI news are you most interested in?",
+        "Currently, we offer specialized AI Funding News updates.",
         reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
     )
     return CHOOSING_INTEREST
