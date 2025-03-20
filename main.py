@@ -8,7 +8,6 @@ import logging
 from config import TELEGRAM_TOKEN
 from db import get_user, create_user, update_user_preferences, create_user_tag
 from news import fetch_ai_tech_news
-from content import generate_social_post
 from ai_analysis import extract_interests_with_ai
 
 # Enable logging
@@ -18,7 +17,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Define conversation states
-GATHERING_INTERESTS, CHOOSING_INTEREST, SELECT_NEWS, CHOOSING_PLATFORM = range(4)
+GATHERING_INTERESTS, CHOOSING_INTEREST = range(2)
 
 def start(update: Update, context: CallbackContext) -> int:
     """Start the conversation and ask for preferences."""
@@ -32,12 +31,12 @@ def start(update: Update, context: CallbackContext) -> int:
         # Create new user with default preferences
         create_user(user_id, user.first_name)
         
-        # Offer AI Funding News as the only option
-        reply_keyboard = [['AI Funding News']]
+        # Ask for interests - offer AI Funding News or Custom
+        reply_keyboard = [['AI Funding News'], ['Custom Preferences']]
         
         update.message.reply_text(
-            f"Hi {user.first_name}! I'll help you stay updated on AI news.\n\n"
-            "Currently, we offer specialized AI Funding News updates.",
+            f"Hi {user.first_name}! I'll help you stay updated on AI funding news.\n\n"
+            "Choose from our standard AI Funding News or set custom preferences.",
             reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
         )
         return CHOOSING_INTEREST
@@ -151,71 +150,19 @@ def news_command(update: Update, context: CallbackContext) -> int:
         news_message += f"Date: {item['date']}\n"
         news_message += f"URL: {item['url']}\n"
         
-        # Add AI explanation if available
+        # Add AI explanations if available
         if 'ai_explanation' in item:
-            news_message += f"\nRelevance: {item['ai_explanation']}\n"
+            news_message += f"\nWhy it matters: {item['ai_explanation']}\n"
+        
+        # Add the AI relevance score if available
+        if 'ai_relevance_score' in item:
+            news_message += f"Relevance Score: {item['ai_relevance_score']}/10\n"
             
         update.message.reply_text(news_message)
     
     # Provide a friendly closing message
     update.message.reply_text(
         "That's all for now! Check back later for more updates or use /reset to change your preferences."
-    )
-    
-    return ConversationHandler.END
-
-def select_news(update: Update, context: CallbackContext) -> int:
-    """Handle the news selection and ask for platform."""
-    try:
-        selection = int(update.message.text) - 1
-        news_items = context.user_data.get('news_items', [])
-        
-        if 0 <= selection < len(news_items):
-            # Store selected news
-            context.user_data['selected_news'] = news_items[selection]
-            
-            # Ask for platform
-            reply_keyboard = [['Twitter'], ['LinkedIn'], ['Reddit']]
-            update.message.reply_text(
-                "Which platform would you like to create content for?",
-                reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
-            )
-            return CHOOSING_PLATFORM
-        else:
-            update.message.reply_text("Invalid selection. Please try again.")
-            return SELECT_NEWS
-    except (ValueError, IndexError):
-        update.message.reply_text("Please enter a valid number.")
-        return SELECT_NEWS
-
-def generate_post(update: Update, context: CallbackContext) -> int:
-    """Generate and display the social media post."""
-    user_id = str(update.effective_user.id)
-    platform = update.message.text.lower()
-    
-    # Get user preferences
-    user_data = get_user(user_id)
-    user_preferences = user_data.get('preferences', {})
-    
-    # Get selected news
-    selected_news = context.user_data.get('selected_news')
-    if not selected_news:
-        update.message.reply_text("Something went wrong. Please try again.")
-        return ConversationHandler.END
-    
-    # Generate post
-    update.message.reply_text("Creating your personalized social media post...")
-    post = generate_social_post(selected_news, platform, user_preferences)
-    
-    # Show generated post
-    update.message.reply_text(
-        f"Here's your {platform} post:\n\n{post}\n\n"
-        f"Link: {selected_news['url']}",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    
-    update.message.reply_text(
-        "Copy this text to post it on your social media. In the future, I'll be able to post directly for you!"
     )
     
     return ConversationHandler.END
@@ -245,7 +192,6 @@ def reset_command(update: Update, context: CallbackContext) -> int:
         reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
     )
     return CHOOSING_INTEREST
-
 
 def help_command(update: Update, context: CallbackContext) -> None:
     """Send a message when the command /help is issued."""
