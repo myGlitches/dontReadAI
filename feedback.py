@@ -49,38 +49,74 @@ def add_feedback_buttons(update: Update, context: CallbackContext, news_items):
 
 def handle_feedback_callback(update: Update, context: CallbackContext) -> int:
     """Handle feedback button callbacks"""
-    query = update.callback_query
-    query.answer()
-    
-    callback_data = query.data
-    user_id = str(update.effective_user.id)
-    
-    # Parse the callback data
-    action, item_index = callback_data.split('_')
-    item_index = int(item_index) - 1  # Convert to 0-based index
-    
-    # Get the news item that was rated
-    news_items = context.user_data.get('news_items', [])
-    if not news_items or item_index >= len(news_items):
-        query.edit_message_text(text="Sorry, I couldn't find the news item you're rating.")
+    try:
+        # Get the callback query
+        query = update.callback_query
+        query.answer()
+        
+        # Extract callback data
+        callback_data = query.data
+        logger.info(f"Received callback data: {callback_data}")
+        
+        # Retrieve the news items from context
+        news_items = context.user_data.get('news_items', [])
+        if not news_items:
+            logger.error("No news items found in user context")
+            query.edit_message_text("Error: Unable to process feedback.")
+            return ConversationHandler.END
+        
+        # Handle like/dislike buttons
+        if callback_data.startswith('like_') or callback_data.startswith('dislike_'):
+            try:
+                # Extract the news item index
+                index = int(callback_data.split('_')[1]) - 1
+                selected_item = news_items[index]
+            except (IndexError, ValueError) as e:
+                logger.error(f"Error extracting news item index: {e}")
+                query.edit_message_text("Error: Invalid news item.")
+                return ConversationHandler.END
+            
+            # If dislike, ask for reason
+            if callback_data.startswith('dislike_'):
+                # Prepare keyboard for feedback reasons
+                keyboard = [
+                    [InlineKeyboardButton("Too Technical", callback_data=f"reason_technical_{index+1}")],
+                    [InlineKeyboardButton("Not Relevant", callback_data=f"reason_irrelevant_{index+1}")],
+                    [InlineKeyboardButton("Already Knew", callback_data=f"reason_known_{index+1}")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                query.edit_message_text(
+                    "Why wasn't this news item helpful?", 
+                    reply_markup=reply_markup
+                )
+                return WAITING_FOR_FEEDBACK_REASON
+            
+            # Handle like feedback
+            query.edit_message_text("Thank you for your feedback!")
+            logger.info(f"Liked news item: {selected_item.get('title', 'Unknown')}")
+        
+        # Handle reason selection
+        elif callback_data.startswith('reason_'):
+            try:
+                # Extract reason and index
+                _, reason, index = callback_data.split('_')
+                index = int(index) - 1
+                selected_item = news_items[index]
+            except (ValueError, IndexError) as e:
+                logger.error(f"Error processing reason: {e}")
+                query.edit_message_text("Error processing feedback.")
+                return ConversationHandler.END
+            
+            # Log the specific reason
+            logger.info(f"Dislike reason for '{selected_item.get('title', 'Unknown')}': {reason}")
+            query.edit_message_text("Thank you for your detailed feedback!")
+        
         return ConversationHandler.END
-        
-    rated_item = news_items[item_index]
     
-    if action == "like":
-        # For positive feedback, simply acknowledge and strengthen preferences
-        query.edit_message_text(
-            text=f"Thanks for the positive feedback! I'll keep bringing you similar content."
-        )
-        
-        # Strengthen existing preferences for this content
-        strengthen_preferences(user_id, rated_item)
-        return ConversationHandler.END
-        
-    elif action == "dislike":
-        # For negative feedback, we want to immediately weaken the relevant preferences
-        # (we'll fine
-    
+    except Exception as e:
+        logger.error(f"Error in handle_feedback_callback: {e}")
+        query.edit_message_text("An error occurred while processing your feedback.")
         return ConversationHandler.END
 
 def process_feedback_reason(update: Update, context: CallbackContext) -> int:
