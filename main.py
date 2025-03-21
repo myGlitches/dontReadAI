@@ -288,15 +288,27 @@ def main() -> None:
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("start", start_command),
-            CallbackQueryHandler(handle_feedback, pattern=f"^({CB_LIKE}|{CB_DISLIKE}|{CB_FEEDBACK})_.*$")
+            CallbackQueryHandler(
+                handle_feedback, 
+                pattern=f"^({CB_LIKE}|{CB_DISLIKE}|{CB_FEEDBACK})_.*$"
+            )
         ],
         states={
             CHOOSING_SERVICE: [
-                CallbackQueryHandler(handle_service_choice, pattern=f"^({CB_NEWS}|{CB_TWITTER})$"),
-                CallbackQueryHandler(handle_feedback, pattern=f"^({CB_LIKE}|{CB_DISLIKE}|{CB_FEEDBACK})_.*$")
+                CallbackQueryHandler(
+                    handle_service_choice, 
+                    pattern=f"^({CB_NEWS}|{CB_TWITTER})_.*$"
+                ),
+                CallbackQueryHandler(
+                    handle_feedback, 
+                    pattern=f"^({CB_LIKE}|{CB_DISLIKE}|{CB_FEEDBACK})_.*$"
+                )
             ],
             PROVIDING_FEEDBACK_REASON: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, process_feedback_reason)
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND, 
+                    process_feedback_reason
+                )
             ]
         },
         fallbacks=[CommandHandler("help", help_command)]
