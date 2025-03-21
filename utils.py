@@ -13,6 +13,32 @@ logger = logging.getLogger(__name__)
 # Initialize OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+def extract_region_from_news(news_item):
+    """Extract geographic regions from a news item"""
+    title = news_item.get('title', '')
+    
+    # Common regions/countries
+    regions = {
+        'us': ['us', 'usa', 'united states', 'american'],
+        'eu': ['eu', 'europe', 'european union', 'european'],
+        'uk': ['uk', 'united kingdom', 'britain', 'british'],
+        'china': ['china', 'chinese'],
+        'india': ['india', 'indian'],
+        'japan': ['japan', 'japanese'],
+        'canada': ['canada', 'canadian'],
+        'australia': ['australia', 'australian'],
+        'africa': ['africa', 'african'],
+        'latam': ['latin america', 'latam', 'brazil', 'mexico']
+    }
+    
+    # Check title for regions
+    for region, keywords in regions.items():
+        for keyword in keywords:
+            if keyword in title.lower():
+                return region
+    
+    return None
+
 def extract_topics_from_news(news_item):
     """Extract relevant topics from a news item"""
     keywords = []
