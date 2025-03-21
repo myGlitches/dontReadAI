@@ -275,7 +275,7 @@ async def send_scheduled_updates(context: ContextTypes.DEFAULT_TYPE) -> None:
 def main() -> None:
     """Start the bot"""
     # Create the Application WITHOUT a job queue
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    application = Application.builder().token(TELEGRAM_TOKEN).job_queue(None).build()
 
     application.job_queue.run_daily(
         send_scheduled_updates,
