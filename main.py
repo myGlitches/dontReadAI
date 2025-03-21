@@ -203,7 +203,7 @@ async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "I'm sorry you didn't find this useful. Would you like to tell me why?", 
             reply_markup=reply_markup
         )
-        return ConversationHandler.END
+        return CHOOSING_SERVICE  # Return to a valid state instead of ending the conversation
         
     elif action == CB_FEEDBACK:
         # Store content ID for this user
@@ -277,19 +277,23 @@ def main() -> None:
     # Create the Application WITHOUT a job queue
     application = Application.builder().token(TELEGRAM_TOKEN).job_queue(None).build()
 
-    application.job_queue.run_daily(
-        send_scheduled_updates,
-        time=datetime.time(hour=int(NEWS_UPDATE_TIME.split(':')[0]), 
-                        minute=int(NEWS_UPDATE_TIME.split(':')[1])),
-        days=(0, 1, 2, 3, 4, 5, 6)
-    )
+    # application.job_queue.run_daily(
+    #     send_scheduled_updates,
+    #     time=datetime.time(hour=int(NEWS_UPDATE_TIME.split(':')[0]), 
+    #                     minute=int(NEWS_UPDATE_TIME.split(':')[1])),
+    #     days=(0, 1, 2, 3, 4, 5, 6)
+    # )
     
     # Conversation handler for the initial service choice
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start_command)],
+        entry_points=[
+            CommandHandler("start", start_command),
+            CallbackQueryHandler(handle_feedback, pattern=f"^({CB_LIKE}|{CB_DISLIKE}|{CB_FEEDBACK})_.*$")
+        ],
         states={
             CHOOSING_SERVICE: [
-                CallbackQueryHandler(handle_service_choice, pattern=f"^({CB_NEWS}|{CB_TWITTER})$")
+                CallbackQueryHandler(handle_service_choice, pattern=f"^({CB_NEWS}|{CB_TWITTER})$"),
+                CallbackQueryHandler(handle_feedback, pattern=f"^({CB_LIKE}|{CB_DISLIKE}|{CB_FEEDBACK})_.*$")
             ],
             PROVIDING_FEEDBACK_REASON: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, process_feedback_reason)
@@ -302,7 +306,6 @@ def main() -> None:
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("news", news_command))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CallbackQueryHandler(handle_feedback, pattern=f"^({CB_LIKE}|{CB_DISLIKE}|{CB_FEEDBACK})_.*$"))
     
     # Start the Bot
     application.run_polling(allowed_updates=Update.ALL_TYPES)
