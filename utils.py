@@ -1,34 +1,40 @@
-# utils.py - Helper functions for our news system
-
 import re
+import logging
+import requests
+import time
+from datetime import datetime, timedelta
+from bs4 import BeautifulSoup
 from openai import OpenAI
 from config import OPENAI_API_KEY
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # Initialize OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 def extract_topics_from_news(news_item):
     """Extract relevant topics from a news item"""
-    # Option 1: Simple keyword extraction
     keywords = []
-    title = news_item.get('title', '').lower()
+    # # Option 1: Simple keyword extraction
+    # title = news_item.get('title', '').lower()
     
-    # AI-related keywords
-    ai_keywords = ['ai', 'artificial intelligence', 'machine learning', 'ml', 'llm', 
-                  'gpt', 'deep learning', 'neural network']
+    # # AI-related keywords
+    # ai_keywords = ['ai', 'artificial intelligence', 'machine learning', 'ml', 'llm', 
+    #               'gpt', 'deep learning', 'neural network']
     
-    # Funding-related keywords
-    funding_keywords = ['funding', 'investment', 'raises', 'venture', 'capital', 
-                       'million', 'billion', 'series a', 'series b', 'seed']
+    # # Funding-related keywords
+    # funding_keywords = ['funding', 'investment', 'raises', 'venture', 'capital', 
+    #                    'million', 'billion', 'series a', 'series b', 'seed']
     
-    # Technology domains
-    tech_domains = ['nlp', 'computer vision', 'robotics', 'generative ai', 
-                   'autonomous', 'cloud', 'saas']
+    # # Technology domains
+    # tech_domains = ['nlp', 'computer vision', 'robotics', 'generative ai', 
+    #                'autonomous', 'cloud', 'saas']
     
-    # Check for keywords in title
-    for keyword in ai_keywords + funding_keywords + tech_domains:
-        if keyword in title and keyword not in keywords:
-            keywords.append(keyword)
+    # # Check for keywords in title
+    # for keyword in ai_keywords + funding_keywords + tech_domains:
+    #     if keyword in title and keyword not in keywords:
+    #         keywords.append(keyword)
     
     # Option 2: Use OpenAI for more sophisticated extraction
     if len(keywords) < 2:  # If simple extraction didn't find much
@@ -41,10 +47,11 @@ def extract_topics_from_news(news_item):
             """
             
             response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=100
             )
+
+            logger.error(f"Extracted tags: {response}")
             
             ai_keywords = response.choices[0].message.content.split(',')
             ai_keywords = [k.strip().lower() for k in ai_keywords]
@@ -54,51 +61,31 @@ def extract_topics_from_news(news_item):
                 if k and k not in keywords:
                     keywords.append(k)
         except Exception as e:
-            print(f"Error using AI for keyword extraction: {e}")
+            logger.error(f"Error using AI for keyword extraction: {e}")
     
     return keywords
 
-def extract_region_from_news(news_item):
-    """Extract geographic regions from a news item"""
-    title = news_item.get('title', '')
-    
-    # Common regions/countries
-    regions = {
-        'us': ['us', 'usa', 'united states', 'american'],
-        'eu': ['eu', 'europe', 'european union', 'european'],
-        'uk': ['uk', 'united kingdom', 'britain', 'british'],
-        'china': ['china', 'chinese'],
-        'india': ['india', 'indian'],
-        'japan': ['japan', 'japanese'],
-        'canada': ['canada', 'canadian'],
-        'australia': ['australia', 'australian'],
-        'africa': ['africa', 'african'],
-        'latam': ['latin america', 'latam', 'brazil', 'mexico']
-    }
-    
-    # Check title for regions
-    for region, keywords in regions.items():
-        for keyword in keywords:
-            if keyword in title.lower():
-                return region
-    
-    return None
-
 def fetch_from_hackernews():
     """Fetch AI funding news from HackerNews API"""
-    import requests
-    import time
-    from datetime import datetime
+    logger.info("Fetching news from HackerNews")
     
     try:
         response = requests.get("https://hacker-news.firebaseio.com/v0/topstories.json")
         if response.status_code != 200:
+            logger.error(f"HackerNews API returned status code {response.status_code}")
             return []
             
-        story_ids = response.json()[:30]  # Get top 30 stories
+        # Get more stories to increase chances of finding AI funding news
+        story_ids = response.json()[:100]  # Get top 100 stories
+        logger.info(f"Retrieved {len(story_ids)} story IDs from HackerNews")
         
         stories = []
+        ai_funding_count = 0
+        
         for story_id in story_ids:
+            if ai_funding_count >= 20:  # Stop once we have enough AI funding stories
+                break
+                
             try:
                 story_response = requests.get(f"https://hacker-news.firebaseio.com/v0/item/{story_id}.json")
                 if story_response.status_code != 200:
@@ -108,6 +95,26 @@ def fetch_from_hackernews():
                 
                 # Skip stories without a title or URL
                 if not story.get('title') or not story.get('url'):
+                    continue
+                
+                title = story.get('title', '').lower()
+                
+                # Check if it's about AI and funding
+                ai_terms = ['ai', 'artificial intelligence', 'machine learning', 'neural', 'gpt', 'llm']
+                funding_terms = ['fund', 'invest', 'capital', 'raise', 'million', 'billion', 'acquisition']
+                
+                is_ai_related = any(term in title for term in ai_terms)
+                is_funding_related = any(term in title for term in funding_terms)
+                
+                # If it's clearly about AI funding, add it
+                if is_ai_related and is_funding_related:
+                    ai_funding_count += 1
+                    logger.info(f"Found AI funding story: {story.get('title')}")
+                # Or if it's just about AI, still add it but don't count it as an AI funding story
+                elif is_ai_related:
+                    logger.info(f"Found AI-related story: {story.get('title')}")
+                else:
+                    # Skip non-AI stories
                     continue
                 
                 # Convert timestamp to date
@@ -125,54 +132,63 @@ def fetch_from_hackernews():
                 time.sleep(0.05)
                 
             except Exception as e:
-                print(f"Error processing HackerNews story: {e}")
-                
+                logger.error(f"Error processing HackerNews story: {e}")
+        
+        logger.info(f"Found {len(stories)} relevant stories from HackerNews")
         return stories
         
     except Exception as e:
-        print(f"Error fetching from HackerNews: {e}")
+        logger.error(f"Error fetching from HackerNews: {e}")
         return []
 
 def fetch_from_techcrunch():
     """Fetch news from TechCrunch RSS feed"""
-    import requests
-    from bs4 import BeautifulSoup
-    from datetime import datetime
+    logger.info("Fetching news from TechCrunch")
     
     try:
         response = requests.get("https://techcrunch.com/feed/")
         if response.status_code != 200:
+            logger.error(f"TechCrunch RSS returned status code {response.status_code}")
             return []
         
         # Parse XML
         soup = BeautifulSoup(response.content, 'xml')
         items = soup.find_all('item')
+        logger.info(f"Retrieved {len(items)} items from TechCrunch RSS")
         
         stories = []
         for item in items:
             try:
-                # Extract date
-                pub_date = item.pubDate.text
-                date_obj = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %z")
-                date = date_obj.strftime('%Y-%m-%d')
+                title = item.title.text
                 
-                stories.append({
-                    'title': item.title.text,
-                    'url': item.link.text,
-                    'date': date,
-                    'source': 'TechCrunch'
-                })
+                # Check if it's about AI
+                ai_terms = ['ai', 'artificial intelligence', 'machine learning', 'neural', 'gpt', 'llm']
+                
+                if any(term in title.lower() for term in ai_terms):
+                    # Extract date
+                    pub_date = item.pubDate.text
+                    date_obj = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %z")
+                    date = date_obj.strftime('%Y-%m-%d')
+                    
+                    stories.append({
+                        'title': title,
+                        'url': item.link.text,
+                        'date': date,
+                        'source': 'TechCrunch'
+                    })
+                    logger.info(f"Found AI-related story: {title}")
             except Exception as e:
-                print(f"Error processing TechCrunch item: {e}")
+                logger.error(f"Error processing TechCrunch item: {e}")
         
+        logger.info(f"Found {len(stories)} relevant stories from TechCrunch")
         return stories
         
     except Exception as e:
-        print(f"Error fetching from TechCrunch: {e}")
+        logger.error(f"Error fetching from TechCrunch: {e}")
         return []
 
 def filter_by_keywords(news_items):
-    """Filter news items based on AI and funding keywords"""
+    """Filter news items based on AI and funding keywords - more lenient to ensure we get enough stories"""
     ai_keywords = ['ai', 'artificial intelligence', 'machine learning', 'ml', 'llm', 
                   'gpt', 'chatgpt', 'deep learning', 'neural network']
                   
@@ -187,42 +203,19 @@ def filter_by_keywords(news_items):
         # Check if it contains AI keywords
         has_ai = any(keyword in title for keyword in ai_keywords)
         
-        # Check if it contains funding keywords
-        has_funding = any(keyword in title for keyword in funding_keywords)
-        
-        # Include if it has both AI and funding references
-        if has_ai and has_funding:
+        # If it's AI-related, include it
+        if has_ai:
             filtered_items.append(item)
+            
+            # Check if it also has funding keywords
+            has_funding = any(keyword in title for keyword in funding_keywords)
+            if has_funding:
+                logger.info(f"AI funding article found: {item.get('title')}")
+            else:
+                logger.info(f"AI-related article found: {item.get('title')}")
     
+    logger.info(f"Filtered to {len(filtered_items)} AI-related items from {len(news_items)} total")
     return filtered_items
-
-def rank_news_by_relevance(news_items, user_preferences):
-    """Rank news items by relevance to user preferences"""
-    user_interests = user_preferences.get('interests', {})
-    ranked_items = []
-    
-    for item in news_items:
-        # Extract topics from the news item
-        topics = extract_topics_from_news(item)
-        
-        # Calculate relevance score
-        relevance_score = 0
-        
-        for topic in topics:
-            # Check if this topic is in user interests
-            for interest, weight in user_interests.items():
-                if topic in interest or interest in topic:
-                    relevance_score += weight
-        
-        # Add relevance score to the item
-        item['relevance_score'] = relevance_score
-        ranked_items.append(item)
-    
-    # Sort by relevance score (descending)
-    ranked_items.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
-    
-    return ranked_items
-
 
 def help_command(update, context):
     """Show enhanced help information"""
