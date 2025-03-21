@@ -1,7 +1,11 @@
+# twitter_service.py - Twitter Top Voices Summary Service
+
 import logging
-import random
 import time
+import random
+from datetime import datetime, timedelta
 from typing import List, Dict
+import urllib.parse
 
 # Choose between different web scraping methods
 def choose_scraping_method():
@@ -114,7 +118,7 @@ def google_search_tweets(experts: List[str], num_results: int = 3) -> List[Dict[
             
             # Construct Google search URL
             query = query_template.format(expert)
-            search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+            search_url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
             
             try:
                 # Fetch search results
@@ -144,7 +148,7 @@ def google_search_tweets(experts: List[str], num_results: int = 3) -> List[Dict[
                                     'username': username,
                                     'name': expert,
                                     'content': "[View original tweet]",
-                                    'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                    'timestamp': datetime.now().isoformat(),
                                     'url': url
                                 }
                                 
@@ -171,21 +175,82 @@ def google_search_tweets(experts: List[str], num_results: int = 3) -> List[Dict[
     
     return tweets_data
 
-# Example usage
-if __name__ == '__main__':
-    # List of AI experts to search
-    experts = [
-        "Sam Altman", 
-        "Elon Musk", 
-        "Yann LeCun", 
-        "Andrew Ng", 
-        "Demis Hassabis"
+def fetch_top_tweets():
+    """
+    Fetch tweets from top AI voices using Google search
+    
+    Returns:
+        list: List of tweet dictionaries
+    """
+    logger = logging.getLogger(__name__)
+    logger.info("Fetching tweets from top AI voices")
+    
+    # Get AI experts from config or use defaults
+    ai_top_voices = [
+        "Sam Altman", "Elon Musk", "Yann LeCun", 
+        "Andrew Ng", "Demis Hassabis"
     ]
     
-    # Fetch tweets
-    tweets = google_search_tweets(experts)
+    # Get tweet links via Google search
+    tweets = google_search_tweets(ai_top_voices, num_results=2)
     
-    # Print results
-    print(f"Found {len(tweets)} tweets:")
+    # Return whatever we found (could be empty)
+    logger.info(f"Found {len(tweets)} tweets from top AI voices")
+    return tweets
+
+def filter_tweets(tweets, excluded_accounts=None):
+    """
+    Filter tweets based on user preferences
+    
+    Args:
+        tweets (list): List of tweet dictionaries
+        excluded_accounts (list, optional): List of accounts to exclude
+    
+    Returns:
+        list: Filtered list of tweets
+    """
+    if not excluded_accounts:
+        excluded_accounts = []
+    
+    filtered_tweets = [
+        tweet for tweet in tweets
+        if tweet['username'].lower() not in [account.lower() for account in excluded_accounts]
+    ]
+    
+    logging.info(f"Filtered to {len(filtered_tweets)} tweets after applying exclusions")
+    return filtered_tweets
+
+def generate_twitter_summary(user_id, tweets):
+    """
+    Generate a summary of tweets from top AI voices
+    
+    Args:
+        user_id (str): User identifier
+        tweets (list): List of tweet dictionaries
+    
+    Returns:
+        str: Formatted summary of tweets
+    """
+    if not tweets:
+        logging.warning("No tweets to summarize")
+        return "No recent tweets from top AI voices found. Please try again later."
+    
+    # Personalized greeting (placeholder - you might want to implement 
+    # a more sophisticated system message retrieval)
+    personalized_greeting = "Here are the latest tweets from top AI voices in the past 24 hours"
+    
+    # Create a summary directly listing the tweet links
+    links_message = f"{personalized_greeting}. Click the links to view the full tweets:\n\n"
+    
     for tweet in tweets:
-        print(f"{tweet['name']} (@{tweet['username']}): {tweet['url']}")
+        links_message += f"• {tweet['name']} (@{tweet['username']}): {tweet['url']}\n"
+    
+    return links_message
+
+# For testing purposes
+if __name__ == "__main__":
+    # Test the tweet fetching function
+    tweets = fetch_top_tweets()
+    print(f"Found {len(tweets)} tweets from the past day")
+    for tweet in tweets:
+        print(f"@{tweet['username']}: {tweet['url']}")
