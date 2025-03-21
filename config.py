@@ -27,11 +27,16 @@ NEWS_UPDATE_TIME = "22:00"  # 10 PM in 24-hour format
 
 # Twitter Service Settings
 TWITTER_VOICES = [
-    "sama",          # Sam Altman
-    "elonmusk",      # Elon Musk
-    "ylecun",        # Yann LeCun
-    "AndrewYNg",     # Andrew Ng
-    "demishassabis"  # Demis Hassabis
+    "Sam Altman",
+    "Elon Musk",
+    "Yann LeCun",
+    "Andrew Ng", 
+    "Demis Hassabis",
+    "Geoffrey Hinton",
+    "Fei-Fei Li",
+    "Ilya Sutskever",
+    "Andrej Karpathy",
+    "Dario Amodei"
 ]
 
 # Default system message for each service
