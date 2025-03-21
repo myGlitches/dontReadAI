@@ -1,221 +1,183 @@
-from supabase import create_client
-from config import SUPABASE_URL, SUPABASE_KEY
-import logging
-import hashlib
-from datetime import datetime
+# db.py - Database interactions
 
-# Initialize Supabase client
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-logging.basicConfig(level=logging.INFO)
+from supabase import create_client
+import logging
+from datetime import datetime
+import json
+from config import SUPABASE_URL, SUPABASE_KEY, DEFAULT_NEWS_SYSTEM_MESSAGE, DEFAULT_TWITTER_SYSTEM_MESSAGE
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-viewed_news_memory = {}
+# Initialize Supabase client with custom options to avoid proxy parameter
+from supabase.lib.client_options import ClientOptions
+options = ClientOptions()
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY, options=options)
 
-def get_user(user_id):
-    """Get user data from Supabase"""
-    response = supabase.table('users').select('*').eq('id', str(user_id)).execute()
-    if response.data and len(response.data) > 0:
-        return response.data[0]
-    return None
-
-def create_user(user_id, name, preferences=None):
-    """Create a new user in Supabase"""
-    if preferences is None:
-        preferences = {"platforms": ["twitter"], "interest": "AI"}
-    
-    user_data = {
-        "id": str(user_id),
-        "name": name,
-        "preferences": preferences
-    }
-    
-    response = supabase.table('users').insert(user_data).execute()
-    return response.data[0] if response.data else None
-
-def get_user_tags(user_id):
-    """Get all tags for a user from preferences"""
-    user = get_user(user_id)
-    if not user or 'preferences' not in user:
-        return {}
-    
-    return user['preferences'].get('interests', {})    
-
-def update_user_tags(user_id, tags_dict):
-    """Update user tags all at once in the preferences field"""
-    # Get current preferences
-    user = get_user(user_id)
-    preferences = user.get('preferences', {}) if user else {}
-    
-    # Update the interests section
-    preferences['interests'] = tags_dict
-    
-    # Save back to database
-    return update_user_preferences(user_id, preferences)
-
-def update_user_preferences(user_id, preferences):
-    """Update user preferences in Supabase"""
-    response = supabase.table('users').update({"preferences": preferences}).eq('id', str(user_id)).execute()
-    return response.data[0] if response.data else None
-
-def create_user_tag(user_id, tag, weight=1.0):
-    """Create a new tag for a user in preferences directly"""
-    # Get current preferences
-    user = get_user(user_id)
-    if not user:
-        logger.error(f"User {user_id} not found when creating tag")
-        return None
-        
-    preferences = user.get('preferences', {})
-    
-    # Make sure interests exists
-    if 'interests' not in preferences:
-        preferences['interests'] = {}
-    
-    # Add or update the tag
-    preferences['interests'][tag] = weight
-    
-    # Save back to database
-    return update_user_preferences(user_id, preferences)
-
-def update_tag_weight(user_id, tag, new_weight):
-    """Update the weight of a user tag"""
-    # Get current preferences
-    user = get_user(user_id)
-    if not user:
-        logger.error(f"User {user_id} not found when updating tag weight")
-        return None
-        
-    preferences = user.get('preferences', {})
-    
-    # Make sure interests exists
-    if 'interests' not in preferences:
-        preferences['interests'] = {}
-    
-    # Update the tag weight if it exists
-    if tag in preferences['interests']:
-        preferences['interests'][tag] = new_weight
-        
-    # Save back to database
-    return update_user_preferences(user_id, preferences)
-
-def delete_user_tags(user_id):
-    """Clear user tags by updating preferences"""
-    user = get_user(user_id)
-    if not user:
-        return None
-        
-    preferences = user.get('preferences', {})
-    preferences['interests'] = {}
-    
-    return update_user_preferences(user_id, preferences)
-
-def generate_news_id(news_item):
-    """Generate a unique ID for a news item based on title and URL"""
-    content_to_hash = f"{news_item['title']}|{news_item.get('url', '')}"
-    return hashlib.md5(content_to_hash.encode()).hexdigest()
-
-def add_viewed_news(user_id, news_item):
-    """Record that a user has viewed a specific news item"""
-    news_id = generate_news_id(news_item)
-    
-    # First try with the database table
+def get_or_create_user(user_id, username=None, first_name=None):
+    """Get user data or create if not exists"""
     try:
-        viewed_data = {
-            "user_id": str(user_id),
-            "news_id": news_id,
-            "title": news_item['title'][:100],  # Store title for reference
-            "viewed_at": datetime.now().isoformat()
+        # Try to get the user
+        response = supabase.table('users').select('*').eq('id', str(user_id)).execute()
+        
+        if response.data and len(response.data) > 0:
+            logger.info(f"Found existing user: {user_id}")
+            return response.data[0]
+        
+        # User doesn't exist, create new
+        logger.info(f"Creating new user: {user_id}")
+        user_data = {
+            "id": str(user_id),
+            "username": username,
+            "first_name": first_name,
+            "created_at": datetime.now().isoformat(),
+            "preferences": {
+                "service_type": None,
+                "news_system_message": DEFAULT_NEWS_SYSTEM_MESSAGE,
+                "twitter_system_message": DEFAULT_TWITTER_SYSTEM_MESSAGE,
+                "excluded_topics": [],
+                "excluded_twitter_accounts": []
+            }
         }
         
-        response = supabase.table('user_viewed_news').insert(viewed_data).execute()
+        response = supabase.table('users').insert(user_data).execute()
+        if response.data and len(response.data) > 0:
+            return response.data[0]
+        else:
+            logger.error(f"Failed to create user: {user_id}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Database error in get_or_create_user: {str(e)}")
+        return None
+
+def update_user_service_choice(user_id, service_type):
+    """Update the user's service choice (news or twitter)"""
+    try:
+        response = supabase.table('users').update({
+            "preferences": {
+                "service_type": service_type
+            }
+        }).eq('id', str(user_id)).execute()
+        
         return response.data[0] if response.data else None
         
     except Exception as e:
-        logger.warning(f"DB operation failed, using memory fallback: {str(e)}")
-        
-        # Fallback to in-memory storage if table doesn't exist
-        if user_id not in viewed_news_memory:
-            viewed_news_memory[user_id] = []
-            
-        viewed_news_memory[user_id].append({
-            "news_id": news_id,
-            "title": news_item['title'][:100],
-            "viewed_at": datetime.now().isoformat()
-        })
-        
-        return {"news_id": news_id}
+        logger.error(f"Database error in update_user_service_choice: {str(e)}")
+        return None
 
-def has_viewed_news(user_id, news_item):
-    """Check if a user has already viewed a specific news item"""
-    news_id = generate_news_id(news_item)
-    
-    # First try with the database table
+def update_user_system_message(user_id, service_type, system_message):
+    """Update the user's customized system message for the specified service"""
     try:
-        response = supabase.table('user_viewed_news') \
-                         .select('*') \
-                         .eq('user_id', str(user_id)) \
-                         .eq('news_id', news_id) \
-                         .execute()
+        # First get current preferences
+        response = supabase.table('users').select('preferences').eq('id', str(user_id)).execute()
+        if not response.data or not response.data[0].get('preferences'):
+            logger.error(f"No preferences found for user: {user_id}")
+            return None
+            
+        # Update the specific system message while preserving other preferences
+        preferences = response.data[0]['preferences']
         
-        return bool(response.data and len(response.data) > 0)
+        if service_type == 'news':
+            preferences['news_system_message'] = system_message
+        elif service_type == 'twitter':
+            preferences['twitter_system_message'] = system_message
+        
+        # Save updated preferences
+        response = supabase.table('users').update({
+            "preferences": preferences
+        }).eq('id', str(user_id)).execute()
+        
+        return response.data[0] if response.data else None
         
     except Exception as e:
-        logger.warning(f"DB operation failed, using memory fallback: {str(e)}")
-        
-        # Fallback to in-memory storage if table doesn't exist
-        if user_id in viewed_news_memory:
-            for item in viewed_news_memory[user_id]:
-                if item["news_id"] == news_id:
-                    return True
-        
-        return False
+        logger.error(f"Database error in update_user_system_message: {str(e)}")
+        return None
 
-def get_user_history(user_id, limit=20):
-    """Get the user's recently viewed news items"""
+def get_user_system_message(user_id, service_type):
+    """Get the user's customized system message for the specified service"""
     try:
-        response = supabase.table('user_viewed_news') \
-                         .select('*') \
-                         .eq('user_id', str(user_id)) \
-                         .order('viewed_at', desc=True) \
-                         .limit(limit) \
-                         .execute()
+        response = supabase.table('users').select('preferences').eq('id', str(user_id)).execute()
         
-        return response.data if response.data else []
+        if response.data and response.data[0].get('preferences'):
+            preferences = response.data[0]['preferences']
+            
+            if service_type == 'news':
+                return preferences.get('news_system_message', DEFAULT_NEWS_SYSTEM_MESSAGE)
+            elif service_type == 'twitter':
+                return preferences.get('twitter_system_message', DEFAULT_TWITTER_SYSTEM_MESSAGE)
+        
+        # Return default if not found
+        if service_type == 'news':
+            return DEFAULT_NEWS_SYSTEM_MESSAGE
+        else:
+            return DEFAULT_TWITTER_SYSTEM_MESSAGE
+            
+    except Exception as e:
+        logger.error(f"Database error in get_user_system_message: {str(e)}")
+        # Return default in case of error
+        if service_type == 'news':
+            return DEFAULT_NEWS_SYSTEM_MESSAGE
+        else:
+            return DEFAULT_TWITTER_SYSTEM_MESSAGE
+
+def update_excluded_items(user_id, service_type, item, add=True):
+    """Add or remove an excluded item (topic/twitter account) for a user"""
+    try:
+        # First get current preferences
+        response = supabase.table('users').select('preferences').eq('id', str(user_id)).execute()
+        if not response.data or not response.data[0].get('preferences'):
+            logger.error(f"No preferences found for user: {user_id}")
+            return None
+            
+        # Update the excluded items while preserving other preferences
+        preferences = response.data[0]['preferences']
+        
+        if service_type == 'news':
+            excluded_list = preferences.get('excluded_topics', [])
+        else:  # twitter
+            excluded_list = preferences.get('excluded_twitter_accounts', [])
+        
+        # Add or remove item
+        if add and item not in excluded_list:
+            excluded_list.append(item)
+        elif not add and item in excluded_list:
+            excluded_list.remove(item)
+        
+        # Update the list in preferences
+        if service_type == 'news':
+            preferences['excluded_topics'] = excluded_list
+        else:  # twitter
+            preferences['excluded_twitter_accounts'] = excluded_list
+        
+        # Save updated preferences
+        response = supabase.table('users').update({
+            "preferences": preferences
+        }).eq('id', str(user_id)).execute()
+        
+        return response.data[0] if response.data else None
         
     except Exception as e:
-        logger.warning(f"DB operation failed, using memory fallback: {str(e)}")
-        
-        # Fallback to in-memory storage
-        if user_id in viewed_news_memory:
-            # Sort by viewed_at in descending order
-            sorted_items = sorted(
-                viewed_news_memory[user_id], 
-                key=lambda x: x.get('viewed_at', ''),
-                reverse=True
-            )
-            return sorted_items[:limit]
-        
-        return []
+        logger.error(f"Database error in update_excluded_items: {str(e)}")
+        return None
 
-def clear_user_history(user_id):
-    """Clear a user's viewing history"""
+def log_user_feedback(user_id, service_type, content_id, feedback_type, feedback_reason=None):
+    """Log user feedback on content"""
     try:
-        response = supabase.table('user_viewed_news') \
-                         .delete() \
-                         .eq('user_id', str(user_id)) \
-                         .execute()
+        feedback_data = {
+            "user_id": str(user_id),
+            "service_type": service_type,
+            "content_id": content_id,
+            "feedback_type": feedback_type,
+            "feedback_reason": feedback_reason,
+            "created_at": datetime.now().isoformat()
+        }
         
-        # Also clear memory storage
-        if user_id in viewed_news_memory:
-            viewed_news_memory[user_id] = []
-            
-        return response.data if response.data else []
+        response = supabase.table('user_feedback').insert(feedback_data).execute()
+        return response.data[0] if response.data else None
         
     except Exception as e:
-        logger.warning(f"DB operation failed, using memory fallback: {str(e)}")
-        
-        # Clear memory storage
-        if user_id in viewed_news_memory:
-            viewed_news_memory[user_id] = []
-            
-        return []
+        logger.error(f"Database error in log_user_feedback: {str(e)}")
+        return None

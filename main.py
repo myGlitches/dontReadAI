@@ -1,527 +1,312 @@
-from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, Filters
-from db import get_user, create_user, update_user_preferences, create_user_tag, delete_user_tags, get_user_tags, update_tag_weight
-from news import fetch_ai_news, generate_news_digest_for_user
-from feedback import add_feedback_buttons, handle_feedback
-from preferences import initialize_preferences
-from config import TELEGRAM_TOKEN
-from ai_analysis import extract_interests_with_ai
-from utils import help_command
+# main.py - Main Telegram bot file
+
 import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler, 
+    MessageHandler, filters, ConversationHandler, ContextTypes
+)
+import asyncio
+import datetime
+import pytz
+from tzlocal import get_localzone_name
 
-# Define conversation states
-CHOOSING_INTEREST, GATHERING_INTERESTS = range(2)
+from config import TELEGRAM_TOKEN, NEWS_UPDATE_TIME
+from db import get_or_create_user, update_user_service_choice
+from news_service import fetch_ai_funding_news, generate_news_summary
+from twitter_service import fetch_top_tweets, filter_tweets, generate_twitter_summary
+from feedback_handler import process_feedback
+from utils import generate_content_id, split_long_message
 
-logging.basicConfig(level=logging.INFO)
+
+# Enable logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-def start_command(update, context):
-    """Start the bot and initialize user preferences"""
+# Define conversation states
+CHOOSING_SERVICE, PROVIDING_FEEDBACK_REASON = range(2)
+
+# Callback data
+CB_NEWS = 'cb_news'
+CB_TWITTER = 'cb_twitter'
+CB_LIKE = 'cb_like'
+CB_DISLIKE = 'cb_dislike'
+CB_FEEDBACK = 'cb_feedback'
+
+# Global variables for callback processing
+user_feedback = {}  # Store user feedback temporarily
+
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Start the bot and ask user to choose service"""
     user = update.effective_user
-    user_data = get_user(user.id)
     
-    if not user_data:
-        # New user - create with default preferences
-        preferences = initialize_preferences(user.id)
-        create_user(user.id, user.first_name, preferences)
-        update.message.reply_text(
-            f"Welcome {user.first_name}! I'll send you personalized AI funding news with insights tailored to your interests. Use /news to get started or /digest for a comprehensive summary."
-        )
-    else:
-        update.message.reply_text(
-            f"Welcome back {user.first_name}! Use /news to get the latest AI funding updates or /digest for a summary of recent developments."
-        )
-
-def news_command(update, context):
-    """Fetch and send personalized news with summaries"""
-    user_id = update.effective_user.id
-    user = get_user(user_id)
+    # Get or create user in database
+    db_user = get_or_create_user(
+        user.id, 
+        username=user.username, 
+        first_name=user.first_name
+    )
     
-    update.message.reply_text("Analyzing AI funding news based on your interests... This might take a moment while I find the most relevant updates.")
+    logger.info(f"User {user.id} started the bot")
     
-    # Get news filtered by user preferences with summaries
-    news_items = fetch_ai_news(user_id, user.get("preferences"), include_summaries=True)
-    
-    if not news_items:
-        update.message.reply_text("Sorry, I couldn't find any new relevant news today. Try again later or reset your history with /clear_history")
-        return
-    
-    # Send each news item with enhanced details
-    for item in news_items:
-        # Format relevance score with stars
-        relevance_score = item.get('relevance_score', 5)
-        stars = '★' * int(relevance_score / 2) + '☆' * (5 - int(relevance_score / 2))
-        
-        # Format topics as hashtags
-        topics = item.get('topics', [])
-        topics_text = ' '.join(['#' + topic.replace(' ', '_') for topic in topics]) if topics else ''
-        
-        # Prepare the summary
-        summary = item.get('summary', '')
-        if summary:
-            summary = f"\n\n📝 *Summary*:\n{summary}"
-        
-        # Create the message text
-        message_text = (
-            f"*{item['title']}*\n\n"
-            f"📰 Source: {item['source']}\n"
-            f"📊 Relevance: {stars} ({relevance_score}/10)\n"
-            f"{topics_text}\n"
-            f"{summary}\n\n"
-            f"🔗 [Read Full Article]({item['url']})"
-        )
-        
-        try:
-            # Try to send with markdown formatting
-            update.message.reply_text(
-                message_text,
-                parse_mode=ParseMode.MARKDOWN,
-                disable_web_page_preview=True
-            )
-        except Exception as e:
-            # Fallback to plain text if markdown fails
-            logger.error(f"Error sending formatted message: {str(e)}")
-            plain_message = (
-                f"{item['title']}\n\n"
-                f"Source: {item['source']}\n"
-                f"Relevance: {relevance_score}/10\n"
-                f"Topics: {', '.join(topics) if topics else 'Not specified'}\n"
-                f"\nSummary:\n{summary}\n\n"
-                f"Read Full Article: {item['url']}"
-            )
-            update.message.reply_text(plain_message, disable_web_page_preview=True)
-    
-    # Add feedback buttons
-    add_feedback_buttons(update, context, news_items)
-
-def digest_command(update, context):
-    """Generate and send a comprehensive news digest"""
-    user_id = update.effective_user.id
-    user = get_user(user_id)
-    
-    update.message.reply_text("Generating your personalized AI funding news digest... This may take a moment.")
-    
-    # Generate the digest
-    digest_result = generate_news_digest_for_user(user_id, user.get("preferences"))
-    
-    if digest_result:
-        # Format the digest message
-        message_text = (
-            f"📋 *Your AI Funding News Digest*\n"
-            f"📅 {digest_result['date']}\n"
-            f"📊 Based on {digest_result['news_count']} recent articles\n\n"
-            f"{digest_result['digest']}\n\n"
-            f"_Use /news to see individual articles with more details._"
-        )
-        
-        try:
-            # Try to send with markdown formatting
-            update.message.reply_text(
-                message_text,
-                parse_mode=ParseMode.MARKDOWN,
-                disable_web_page_preview=True
-            )
-        except Exception as e:
-            # Fallback to plain text if markdown fails
-            logger.error(f"Error sending formatted digest: {str(e)}")
-            update.message.reply_text(
-                digest_result['digest'],
-                disable_web_page_preview=True
-            )
-    else:
-        update.message.reply_text("Sorry, I couldn't generate a news digest at this time. Please try again later.")
-
-# Original functions from main.py would remain the same...
-def interests_command(update, context):
-    """Show the user their current interest tags"""
-    user_id = update.effective_user.id
-    tags = get_user_tags(user_id)
-    
-    if not tags:
-        update.message.reply_text("You haven't set any specific interests yet. Use /reset to set up your interests.")
-        return
-    
-    # Sort tags by weight (descending)
-    sorted_tags = sorted(tags.items(), key=lambda x: x[1], reverse=True)
-    
-    # Format the message
-    message = "Your current interests (sorted by importance):\n\n"
-    for tag, weight in sorted_tags:
-        # Convert weight to stars (1.0 = 5 stars, 0 = 0 stars)
-        stars = int(weight * 5)
-        star_display = "★" * stars + "☆" * (5 - stars)
-        message += f"{tag}: {star_display} ({weight:.1f})\n"
-    
-    update.message.reply_text(message)
-    
-    # Add buttons for managing interests
+    # Create keyboard for service selection
     keyboard = [
-        [InlineKeyboardButton("Add New Interest", callback_data="add_interest")],
-        [InlineKeyboardButton("Reset All Interests", callback_data="reset_interests")]
+        [
+            InlineKeyboardButton("AI Funding News", callback_data=CB_NEWS),
+            InlineKeyboardButton("Top Twitter Voice Summary", callback_data=CB_TWITTER)
+        ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text("Options:", reply_markup=reply_markup)
-
-def reset_preferences(update, context):
-    """Reset user preferences and restart the preference setup process"""
-    user_id = str(update.effective_user.id)
-    user = update.effective_user
     
-    # Clear user preferences
-    empty_preferences = {
-        "interests": {},
-        "exclusions": []
-    }
-    
-    update_user_preferences(user_id, empty_preferences)
-    
-    # Clear all user tags
-    delete_user_tags(user_id)
-    
-    # Offer choice again
-    reply_keyboard = [['AI Funding News'], ['Custom Preferences']]
-    
-    update.message.reply_text(
-        f"Hi {user.first_name}! I've reset your preferences. Let's start over.\n\n"
-        "Choose from our standard AI Funding News or set custom preferences.",
-        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+    # Send welcome message
+    await update.message.reply_text(
+        f"Hi {user.first_name}! Welcome to the AI News Bot.\n\n"
+        f"Please choose which type of updates you'd like to receive:",
+        reply_markup=reply_markup
     )
     
-    return CHOOSING_INTEREST
+    return CHOOSING_SERVICE
 
-def process_interests(update, context):
-    """Process the user's custom interests and save them using AI analysis."""
-    user_id = str(update.effective_user.id)
-    user_text = update.message.text
-    
-    # Let the user know we're processing
-    update.message.reply_text("Analyzing your interests with AI... One moment please.")
-    
-    try:
-        # Use the AI-based analysis from ai_analysis.py
-        ai_preferences = extract_interests_with_ai(user_text)
-        
-        # Update user preferences
-        update_user_preferences(user_id, ai_preferences)
-        
-        # Clear existing tags
-        delete_user_tags(user_id)
-        
-        # Create tags for this user from the AI-extracted interests
-        for topic, weight in ai_preferences.get('interests', {}).items():
-            create_user_tag(user_id, topic, weight)
-        
-        # Format a nice response with the extracted interests
-        interest_list = ", ".join(list(ai_preferences.get('interests', {}).keys())[:3])
-        if len(ai_preferences.get('interests', {})) > 3:
-            interest_list += f", and {len(ai_preferences.get('interests', {})) - 3} more"
-        
-        tech_level = ai_preferences.get('technical_level', 'intermediate')
-        role = ai_preferences.get('role', 'investor')
-        
-        update.message.reply_text(
-            f"Thanks! I've analyzed your interests.\n\n"
-            f"It seems you're most interested in: {interest_list}.\n"
-            f"I've identified your profile as: {role} with {tech_level} technical knowledge.\n\n"
-            f"Type /news for personalized updates with summaries\n"
-            f"Type /digest for a comprehensive news overview\n"
-            f"Type /interests to see all your interests.",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        
-    except Exception as e:
-        logger.error(f"Error in AI interest processing: {str(e)}")
-        # Fallback to simpler keyword extraction
-        interests = {}
-        
-        # Simple keyword extraction
-        keywords = ["ai", "machine learning", "nlp", "computer vision", "healthcare", 
-                    "fintech", "startups", "funding", "series a", "early-stage"]
-        
-        for keyword in keywords:
-            if keyword.lower() in user_text.lower():
-                interests[keyword] = 0.8
-        
-        # If no keywords found, add some defaults
-        if not interests:
-            interests = {
-                "ai_funding": 0.9,
-                "startups": 0.8
-            }
-        
-        # Create preferences object
-        preferences = {
-            "interests": interests,
-            "exclusions": [],
-            "technical_level": "intermediate" if "technical" in user_text.lower() else "beginner"
-        }
-        
-        # Update user preferences
-        update_user_preferences(user_id, preferences)
-        
-        # First clear existing tags
-        delete_user_tags(user_id)
-        
-        # Create tags for this user
-        for topic, weight in interests.items():
-            create_user_tag(user_id, topic, weight)
-        
-        # Confirm and provide next steps
-        topics = list(interests.keys())
-        topic_text = ", ".join(topics[:3])
-        if len(topics) > 3:
-            topic_text += f", and {len(topics)-3} more"
-            
-        update.message.reply_text(
-            f"Thanks! I'll focus on bringing you news about {topic_text}.\n\n"
-            "Type /news to get personalized news updates.",
-            reply_markup=ReplyKeyboardRemove()
-        )
-    
-    return ConversationHandler.END
-
-# Include other functions from main.py here...
-
-def handle_interest_callbacks(update, context):
-    """Process callbacks related to interests"""
+async def handle_service_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle service choice callback"""
     query = update.callback_query
-    query.answer()
-    data = query.data
+    await query.answer()
+    
     user_id = update.effective_user.id
+    choice = query.data
     
-    if data == "add_interest":
-        # Start a conversation to add a new interest
-        query.edit_message_text("Please type the interest you want to add, for example 'computer vision'")
-        # Set conversation state to wait for interest input
-        context.user_data['waiting_for'] = 'interest_name'
-        return
-        
-    elif data == "reset_interests":
-        # Reset user interests
-        reset_preferences(update, context)
-        
-    elif data == "clear_history":
-        # Clear viewing history
-        from db import clear_user_history
-        clear_user_history(user_id)
-        query.edit_message_text("Your news viewing history has been cleared.")
-
-def save_interest(update, context):
-    """Save the selected interest category to the database."""
-    user_id = str(update.effective_user.id)
-    selected_option = update.message.text
-    
-    if selected_option == 'Custom Preferences':
-        update.message.reply_text(
-            "Great! Please tell me more about your interests in AI funding and investment.\n\n"
-            "For example, you might say: \"I'm interested in early-stage AI startups, "
-            "especially in healthcare, NLP, and computer vision. I prefer detailed technical news.\""
-        )
-        return GATHERING_INTERESTS
-    
-    preferences = {
-        "interests": {
-            "ai_funding": 1.0,
-            "venture capital": 0.9,
-            "startups": 0.8
-        },
-        "exclusions": [],
-        "technical_level": "intermediate"
-    }
-    
-    try:
-        # Update user preferences in database
-        update_user_preferences(user_id, preferences)
-        
-        try:
-            # First clear existing tags - if function exists
-            delete_user_tags(user_id)
-        except Exception as e:
-            print(f"Warning: Could not delete existing tags: {e}")
-        
-        # Create tags for this user
-        for topic, weight in preferences["interests"].items():
-            try:
-                create_user_tag(user_id, topic, weight)
-            except Exception as e:
-                print(f"Warning: Could not create tag '{topic}': {e}")
-    except Exception as e:
-        print(f"Error updating preferences: {e}")
-        update.message.reply_text(
-            "Sorry, there was an error saving your preferences. Please try again."
-        )
+    # Determine which service was chosen
+    if choice == CB_NEWS:
+        service_type = 'news'
+        service_name = 'AI Funding News'
+    elif choice == CB_TWITTER:
+        service_type = 'twitter'
+        service_name = 'Twitter Top Voices Summary'
+    else:
+        # Invalid choice
+        await query.edit_message_text("Sorry, I didn't understand your choice. Please try again.")
         return ConversationHandler.END
     
-    # Provide confirmation
-    update.message.reply_text(
-        "Great! I'll focus on finding AI funding news for you.\n\n"
-        "This includes investments, fundraising rounds, and venture capital activity in the AI space.\n\n"
-        "Type /news anytime to get the latest AI funding updates.",
-        reply_markup=ReplyKeyboardRemove()
+    # Update user preference in the database
+    update_user_service_choice(user_id, service_type)
+    
+    logger.info(f"User {user_id} chose {service_name}")
+    
+    # Inform the user about their choice
+    await query.edit_message_text(
+        f"Thanks for choosing {service_name}!\n\n"
+        f"You will receive daily updates at {NEWS_UPDATE_TIME}.\n\n"
+        f"If you want to get news right now, just once, send the command: /news"
     )
     
     return ConversationHandler.END
 
-def process_interests(update, context):
-    """Process the user's custom interests and save them using AI analysis."""
-    user_id = str(update.effective_user.id)
-    user_text = update.message.text
+async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Provide news on demand"""
+    user_id = update.effective_user.id
     
-    # Let the user know we're processing
-    update.message.reply_text("Analyzing your interests with AI... One moment please.")
+    # Get or create user in database
+    db_user = get_or_create_user(user_id)
     
-    try:
-        # Use the AI-based analysis from ai_analysis.py
-        ai_preferences = extract_interests_with_ai(user_text)
+    # Get service preference (default to news if not set)
+    service_type = db_user.get('preferences', {}).get('service_type', 'news')
+    
+    await update.message.reply_text("Fetching your personalized summary... This might take a minute.")
+    
+    # Generate the appropriate summary based on service type
+    if service_type == 'news':
+        # Fetch AI funding news
+        news_items = fetch_ai_funding_news()
         
-        # Update user preferences
-        update_user_preferences(user_id, ai_preferences)
+        if not news_items:
+            await update.message.reply_text("Sorry, I couldn't find any relevant AI funding news today.")
+            return
         
-        # Clear existing tags
-        delete_user_tags(user_id)
+        # Generate summary
+        summary = generate_news_summary(user_id, news_items)
+        content_id = generate_content_id(news_items)
         
-        # Create tags for this user from the AI-extracted interests
-        for topic, weight in ai_preferences.get('interests', {}).items():
-            create_user_tag(user_id, topic, weight)
+    else:  # Twitter
+        # Fetch tweets from top voices
+        tweets = fetch_top_tweets()
         
-        # Format a nice response with the extracted interests
-        interest_list = ", ".join(list(ai_preferences.get('interests', {}).keys())[:3])
-        if len(ai_preferences.get('interests', {})) > 3:
-            interest_list += f", and {len(ai_preferences.get('interests', {})) - 3} more"
+        # Filter tweets based on user preferences
+        excluded_accounts = db_user.get('preferences', {}).get('excluded_twitter_accounts', [])
+        filtered_tweets = filter_tweets(tweets, excluded_accounts)
         
-        tech_level = ai_preferences.get('technical_level', 'intermediate')
-        role = ai_preferences.get('role', 'investor')
+        if not filtered_tweets:
+            await update.message.reply_text("Sorry, I couldn't find any relevant tweets from top AI voices today.")
+            return
         
-        update.message.reply_text(
-            f"Thanks! I've analyzed your interests.\n\n"
-            f"It seems you're most interested in: {interest_list}.\n"
-            f"I've identified your profile as: {role} with {tech_level} technical knowledge.\n\n"
-            f"Type /news anytime to get personalized AI funding updates or /interests to see all your interests.",
-            reply_markup=ReplyKeyboardRemove()
+        # Generate summary
+        summary = generate_twitter_summary(user_id, filtered_tweets)
+        content_id = generate_content_id(filtered_tweets)
+    
+    # Split the message if it's too long
+    message_parts = split_long_message(summary)
+    
+    # Send all parts except the last one
+    for part in message_parts[:-1]:
+        await update.message.reply_text(part)
+    
+    # For the last part, add feedback buttons
+    keyboard = [
+        [
+            InlineKeyboardButton("👍 Liked it", callback_data=f"{CB_LIKE}_{content_id}"),
+            InlineKeyboardButton("👎 Didn't like it", callback_data=f"{CB_DISLIKE}_{content_id}")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Send the last part with feedback buttons
+    await update.message.reply_text(
+        message_parts[-1], 
+        reply_markup=reply_markup
+    )
+
+async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle feedback callback"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    callback_data = query.data
+    
+    # Parse callback data
+    parts = callback_data.split('_')
+    action = parts[0]
+    content_id = parts[1] if len(parts) > 1 else None
+    
+    # Get user info
+    db_user = get_or_create_user(user_id)
+    service_type = db_user.get('preferences', {}).get('service_type', 'news')
+    
+    if action == CB_LIKE:
+        # Process positive feedback
+        response = process_feedback(user_id, service_type, content_id, 'positive')
+        await query.edit_message_text(response)
+        return ConversationHandler.END
+        
+    elif action == CB_DISLIKE:
+        # Ask for reason for negative feedback
+        keyboard = [
+            [InlineKeyboardButton("Provide feedback", callback_data=f"{CB_FEEDBACK}_{content_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "I'm sorry you didn't find this useful. Would you like to tell me why?", 
+            reply_markup=reply_markup
         )
+        return ConversationHandler.END
         
-    except Exception as e:
-        logger.error(f"Error in AI interest processing: {str(e)}")
-        # Fallback to simpler keyword extraction
-        interests = {}
-        
-        # Simple keyword extraction
-        keywords = ["ai", "machine learning", "nlp", "computer vision", "healthcare", 
-                    "fintech", "startups", "funding", "series a", "early-stage"]
-        
-        for keyword in keywords:
-            if keyword.lower() in user_text.lower():
-                interests[keyword] = 0.8
-        
-        # If no keywords found, add some defaults
-        if not interests:
-            interests = {
-                "ai_funding": 0.9,
-                "startups": 0.8
-            }
-        
-        # Create preferences object
-        preferences = {
-            "interests": interests,
-            "exclusions": [],
-            "technical_level": "intermediate" if "technical" in user_text.lower() else "beginner"
+    elif action == CB_FEEDBACK:
+        # Store content ID for this user
+        user_feedback[user_id] = {
+            'content_id': content_id,
+            'service_type': service_type
         }
         
-        # Update user preferences
-        update_user_preferences(user_id, preferences)
-        
-        # First clear existing tags
-        delete_user_tags(user_id)
-        
-        # Create tags for this user
-        for topic, weight in interests.items():
-            create_user_tag(user_id, topic, weight)
-        
-        # Confirm and provide next steps
-        topics = list(interests.keys())
-        topic_text = ", ".join(topics[:3])
-        if len(topics) > 3:
-            topic_text += f", and {len(topics)-3} more"
-            
-        update.message.reply_text(
-            f"Thanks! I'll focus on bringing you news about {topic_text}.\n\n"
-            "Type /news anytime to get personalized AI news updates.",
-            reply_markup=ReplyKeyboardRemove()
+        await query.edit_message_text(
+            "Please tell me what you didn't like about this summary, or what you'd prefer to see instead."
         )
+        return PROVIDING_FEEDBACK_REASON
     
     return ConversationHandler.END
 
-def cancel(update, context):
-    """Cancel and end the conversation."""
-    update.message.reply_text('Operation cancelled.', reply_markup=ReplyKeyboardRemove())
+async def process_feedback_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Process the feedback reason provided by the user"""
+    user_id = update.effective_user.id
+    feedback_reason = update.message.text
+    
+    # Get stored feedback data
+    feedback_data = user_feedback.get(user_id, {})
+    content_id = feedback_data.get('content_id')
+    service_type = feedback_data.get('service_type', 'news')
+    
+    if not content_id:
+        await update.message.reply_text("Sorry, I couldn't process your feedback. Please try again later.")
+        return ConversationHandler.END
+    
+    # Process the feedback
+    response = process_feedback(user_id, service_type, content_id, 'negative', feedback_reason)
+    
+    # Clean up stored data
+    if user_id in user_feedback:
+        del user_feedback[user_id]
+    
+    await update.message.reply_text(response)
     return ConversationHandler.END
 
-def reset_preferences(update, context):
-    """Reset user preferences and restart the preference setup process"""
-    user_id = str(update.effective_user.id)
-    user = update.effective_user
-    
-    # Clear user preferences
-    empty_preferences = {
-        "interests": {},
-        "exclusions": []
-    }
-    
-    update_user_preferences(user_id, empty_preferences)
-    
-    # Clear all user tags
-    delete_user_tags(user_id)
-    
-    # Offer choice again
-    reply_keyboard = [['AI Funding News'], ['Custom Preferences']]
-    
-    update.message.reply_text(
-        f"Hi {user.first_name}! I've reset your preferences. Let's start over.\n\n"
-        "Choose from our standard AI Funding News or set custom preferences.",
-        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Display help information"""
+    help_text = (
+        "🤖 *AI News Bot Help* 🤖\n\n"
+        "*Available Commands:*\n"
+        "/start - Initialize the bot and choose which type of updates to receive\n"
+        "/news - Get the latest personalized summary\n"
+        "/help - Show this help message\n\n"
+        "The bot will deliver daily updates at 10 PM based on your preferences.\n"
+        "After each update, you can provide feedback to help improve future summaries."
     )
     
-    return CHOOSING_INTEREST
+    await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
-def main():
-    updater = Updater(TELEGRAM_TOKEN)
-    dp = updater.dispatcher
+async def send_scheduled_updates(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send scheduled updates to all users"""
+    logger.info("Sending scheduled updates")
     
-    # Register command handlers
-    dp.add_handler(CommandHandler("start", start_command))
-    dp.add_handler(CommandHandler("help", help_command))
-    dp.add_handler(CommandHandler("news", news_command))
-    dp.add_handler(CommandHandler("digest", digest_command))  # New command for digests
-    dp.add_handler(CommandHandler("interests", interests_command))
-    dp.add_handler(CommandHandler("reset", reset_preferences))
+    # In a real implementation, you would:
+    # 1. Query the database for all active users
+    # 2. Check their service preference
+    # 3. Generate and send appropriate updates
     
-    # Add conversation handler for preference setup
+    # For this prototype, we'll use a placeholder
+    logger.info("Scheduled updates would be sent here")
+    
+    # Note: This requires implementing a separate function to get all users
+    # and their preferences from the database, then sending messages to each
+
+def main() -> None:
+    """Start the bot"""
+    # Create the Application WITHOUT a job queue
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+
+    application.job_queue.run_daily(
+        send_scheduled_updates,
+        time=datetime.time(hour=int(NEWS_UPDATE_TIME.split(':')[0]), 
+                        minute=int(NEWS_UPDATE_TIME.split(':')[1])),
+        days=(0, 1, 2, 3, 4, 5, 6)
+    )
+    
+    # Conversation handler for the initial service choice
     conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler('start', start_command),
-            CommandHandler('reset', reset_preferences)
-        ],
+        entry_points=[CommandHandler("start", start_command)],
         states={
-            CHOOSING_INTEREST: [MessageHandler(Filters.text & ~Filters.command, save_interest)],
-            GATHERING_INTERESTS: [MessageHandler(Filters.text & ~Filters.command, process_interests)]
+            CHOOSING_SERVICE: [
+                CallbackQueryHandler(handle_service_choice, pattern=f"^({CB_NEWS}|{CB_TWITTER})$")
+            ],
+            PROVIDING_FEEDBACK_REASON: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_feedback_reason)
+            ]
         },
-        fallbacks=[
-            CommandHandler('cancel', cancel),
-            CommandHandler('help', help_command),
-            CommandHandler('news', news_command)
-        ]
+        fallbacks=[CommandHandler("help", help_command)]
     )
     
-    dp.add_handler(conv_handler)
+    # Register handlers
+    application.add_handler(conv_handler)
+    application.add_handler(CommandHandler("news", news_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CallbackQueryHandler(handle_feedback, pattern=f"^({CB_LIKE}|{CB_DISLIKE}|{CB_FEEDBACK})_.*$"))
     
-    # Add callback query handlers
-    dp.add_handler(CallbackQueryHandler(handle_interest_callbacks, pattern='^(add_interest|reset_interests|clear_history)$'))
-    dp.add_handler(CallbackQueryHandler(handle_feedback, pattern='^(like_|dislike_|reason_)'))
-    
-    # Include all other functions and handlers from main.py
-    
-    updater.start_polling()
-    updater.idle()
+    # Start the Bot
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("Bot started")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
