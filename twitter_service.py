@@ -3,7 +3,7 @@
 import logging
 import time
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from openai import OpenAI
 from config import OPENAI_API_KEY, TWITTER_VOICES
 from db import get_user_system_message
@@ -26,13 +26,20 @@ logger = logging.getLogger(__name__)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 def google_search_tweets(ai_experts, num_results=3):
-    """Search Google for recent tweets from AI experts."""
+    """Search Google for recent tweets from AI experts within the last day."""
     tweets_data = []
-    query_template = 'site:x.com "{}" AI OR machine learning OR LLM OR OpenAI OR startup'
+    
+    # Get current date and yesterday's date
+    today = datetime.now().strftime("%Y-%m-%d")
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    # Query template including date range for recent tweets
+    query_template = 'site:x.com "{}" AI OR machine learning OR LLM OR OpenAI OR startup after:{} before:{}'
     
     for expert in ai_experts:
-        query = query_template.format(expert)
-        logger.info(f"Searching tweets for: {expert}")
+        # Construct query with date range
+        query = query_template.format(expert, yesterday, today)
+        logger.info(f"Searching tweets for: {expert} from {yesterday} to {today}")
         
         try:
             results = search(query, num_results=num_results)
@@ -58,16 +65,16 @@ def google_search_tweets(ai_experts, num_results=3):
         except Exception as e:
             logger.error(f"Google search failed for {expert}: {str(e)}")
             
-        # Sleep to avoid hitting rate limits
-        time.sleep(random.uniform(1, 3))
+        # Sleep to avoid hitting rate limits, but keep it reasonable
+        time.sleep(random.uniform(1, 2))
     
     return tweets_data
 
 def fetch_top_tweets():
     """
-    Fetch tweets from top AI voices using Google search
+    Fetch tweets from top AI voices using Google search for the last day
     """
-    logger.info("Fetching tweets from top AI voices")
+    logger.info("Fetching tweets from top AI voices for the past day")
     
     # Get AI experts from config or use defaults
     ai_top_voices = TWITTER_VOICES if TWITTER_VOICES else [
@@ -78,7 +85,7 @@ def fetch_top_tweets():
     tweets = google_search_tweets(ai_top_voices, num_results=2)
     
     # Return whatever we found (could be empty)
-    logger.info(f"Found {len(tweets)} tweets from top AI voices")
+    logger.info(f"Found {len(tweets)} tweets from top AI voices in the past day")
     return tweets
 
 def filter_tweets(tweets, excluded_accounts=None):
@@ -105,8 +112,7 @@ def generate_twitter_summary(user_id, tweets):
     
     # Check if the user has specific preferences in their system message
     # For example, they might prefer a specific format or introduction
-    # This is a simple implementation - you can enhance it based on your needs
-    personalized_greeting = "Here are the latest tweets from top AI voices"
+    personalized_greeting = "Here are the latest tweets from top AI voices in the past 24 hours"
     if system_message and "GREETING:" in system_message:
         try:
             # Extract custom greeting if defined in system message
@@ -128,6 +134,6 @@ def generate_twitter_summary(user_id, tweets):
 if __name__ == "__main__":
     # Test the tweet fetching function
     tweets = fetch_top_tweets()
-    print(f"Found {len(tweets)} tweets")
+    print(f"Found {len(tweets)} tweets from the past day")
     for tweet in tweets:
         print(f"@{tweet['username']}: {tweet['url']}")
